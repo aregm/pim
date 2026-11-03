@@ -1,0 +1,24 @@
+# One engine per machine for PIM, bound to loopback. Start with `npm run engine` (sets III_TELEMETRY_ENABLED=false).
+namespace: pim
+engine:
+  url: ws://127.0.0.1:49140
+  workers:
+    configuration:
+      adapter:
+        name: fs
+        config:
+          directory: ./.iii/config
+    iii-worker-manager:
+      host: 127.0.0.1
+      port: 49140
+containers:
+  parse:
+    worker: path://../packages/worker-parse
+    restart: on-failure
+    scripts:
+      run: node src/index.ts
+  media:
+    worker: path://../workers-py/media
+    restart: on-failure
+    scripts:
+      run: ../../.tooling/py/bin/python src/main.py

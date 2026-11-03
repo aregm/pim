@@ -1,0 +1,30 @@
+{
+  "name": "pim",
+  "private": true,
+  "version": "0.1.0",
+  "description": "PIM: a local-first multimodal knowledge desktop on Electron and the iii engine",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "setup": "sh infra/setup.sh",
+    "engine": "III_TELEMETRY_ENABLED=false .tooling/iii/bin/iii compose --up -f infra/worker-compose.yaml",
+    "dev": "npm run dev -w apps/desktop",
+    "contracts": "npm run export -w packages/contracts",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "test": "vitest run",
+    "gate0": "node scripts/gate0.mjs"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.4",
+    "@types/node": "26.6.6",
+    "typescript": "^5.9.0",
+    "vitest": "5.1.0"
+  },
+  "engines": {
+    "node": ">=26"
+  },
+  "type": "module"
+}
