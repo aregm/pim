@@ -33,6 +33,8 @@ export type Selector =
       bbox?: [number, number, number, number] | undefined
     }
   | { kind: 'char'; start: number; end: number }
+  | { kind: 'time'; start_ms: number; end_ms: number }
+  | { kind: 'box'; x: number; y: number; w: number; h: number }
 export interface FragmentView {
   id: string
   payload_id: string

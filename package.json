@@ -15,7 +15,8 @@
     "lint": "biome check .",
     "format": "biome format --write .",
     "test": "vitest run",
-    "gate0": "node scripts/gate0.mjs"
+    "gate0": "node scripts/gate0.mjs",
+    "test:py": ".tooling/py/bin/python -m unittest discover -s workers-py/media/tests"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.4",

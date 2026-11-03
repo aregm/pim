@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import type { FragmentView, ItemView, PayloadView } from '../pim.d.ts'
 import { Button, Chip, colors, kindLabel, when } from '../ui.tsx'
 import { HtmlViewer } from '../viewers/HtmlViewer.tsx'
+import { ImageViewer } from '../viewers/ImageViewer.tsx'
+import { MediaViewer } from '../viewers/MediaViewer.tsx'
 import { PdfViewer } from '../viewers/PdfViewer.tsx'
 import { TextViewer } from '../viewers/TextViewer.tsx'
 
@@ -49,10 +51,23 @@ export function Item({ item, focusFragment }: { item: ItemView; focusFragment: s
       )
     if (raw.mime.startsWith('image/'))
       return (
-        <img
-          src={window.pim.blobUrl(raw.blob_id)}
+        <ImageViewer
+          blobId={raw.blob_id}
           alt={item.title ?? ''}
-          style={{ maxWidth: '100%', display: 'block', margin: '16px auto' }}
+          fragments={fragments}
+          selected={selected}
+          onSelect={setSelected}
+        />
+      )
+    if (raw.mime.startsWith('audio/') || raw.mime.startsWith('video/'))
+      return (
+        <MediaViewer
+          blobId={raw.blob_id}
+          mime={raw.mime}
+          fragments={fragments}
+          selected={selected}
+          onSelect={setSelected}
+          keyframesBlobId={payloads.find((p) => p.role === 'keyframes')?.blob_id}
         />
       )
     if (raw.mime.startsWith('text/'))
@@ -101,7 +116,10 @@ export function Item({ item, focusFragment }: { item: ItemView; focusFragment: s
           {viewer}
         </div>
         <aside style={{ flex: 1, overflow: 'auto', fontSize: 13, minWidth: 220 }}>
-          <strong>Fragments</strong> <span style={{ color: colors.muted }}>{fragments.length}</span>
+          <strong>Fragments</strong>{' '}
+          <span style={{ color: colors.muted }}>
+            {fragments.filter((f) => f.selector.kind !== 'time').length || fragments.length}
+          </span>
           {fragments.length === 0 && (
             <p style={{ color: colors.muted }}>none yet; extraction runs after preservation</p>
           )}
@@ -121,6 +139,11 @@ export function Item({ item, focusFragment }: { item: ItemView; focusFragment: s
                     borderRadius: 3,
                   }}
                 >
+                  {f.selector.kind === 'time' && (
+                    <span
+                      style={{ color: colors.muted, marginRight: 6 }}
+                    >{`${Math.floor(f.selector.start_ms / 60000)}:${String(Math.floor(f.selector.start_ms / 1000) % 60).padStart(2, '0')}`}</span>
+                  )}
                   {f.text.length > 140 ? `${f.text.slice(0, 140)}…` : f.text}
                 </button>
               </li>

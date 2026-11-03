@@ -68,6 +68,8 @@ export type Selector =
       bbox?: [number, number, number, number] | undefined
     }
   | { kind: 'char'; start: number; end: number }
+  | { kind: 'time'; start_ms: number; end_ms: number }
+  | { kind: 'box'; x: number; y: number; w: number; h: number }
 
 export interface FragmentInput {
   ordinal: number
@@ -310,6 +312,13 @@ export class Vault {
       .prepare('UPDATE job SET state = ?, lease_until = ?, updated_at = ? WHERE id = ?')
       .run('running', plus(leaseMs), t, row.id)
     return { ...row, state: 'running' }
+  }
+
+  /** Keeps a long-running job's lease alive so no other tick claims it (media jobs can take minutes). */
+  extendLease(id: string, leaseMs = 60_000) {
+    this.db
+      .prepare("UPDATE job SET lease_until = ?, updated_at = ? WHERE id = ? AND state = 'running'")
+      .run(plus(leaseMs), now(), id)
   }
 
   completeJob(id: string) {

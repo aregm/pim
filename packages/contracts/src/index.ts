@@ -68,18 +68,37 @@ export const Selector = z.discriminatedUnion('kind', [
     kind: z.literal('char'),
     start: z.number().int().nonnegative(),
     end: z.number().int().nonnegative(),
+  }),  z.object({
+    kind: z.literal('time'),
+    start_ms: z.number().int().nonnegative(),
+    end_ms: z.number().int().nonnegative(),
   }),
+  z.object({ kind: z.literal('box'), x: z.number(), y: z.number(), w: z.number(), h: z.number() }),
 ])
 export type Selector = z.infer<typeof Selector>
 
 export const Extraction = z.object({
   fragments: z.array(
-    z.object({ ordinal: z.number().int().nonnegative(), selector: Selector, text: z.string() }),
+    z.object({
+      ordinal: z.number().int().nonnegative(),
+      selector: Selector,
+      text: z.string(),
+      confidence: z.number().optional(),
+    }),
   ),
   normalized_text: z.string().optional(),
   pages: z.number().int().nonnegative().optional(),
+  duration_ms: z.number().int().nonnegative().optional(),
+  model: z.string().optional(),
 })
 export type Extraction = z.infer<typeof Extraction>
+
+/** What `media::keyframes` returns: files in the worker's scratch directory, which the core moves into the vault. */
+export const Keyframes = z.object({
+  keyframes: z.array(z.object({ at_ms: z.number().int().nonnegative(), path: z.string() })),
+  duration_ms: z.number().int().nonnegative(),
+})
+export type Keyframes = z.infer<typeof Keyframes>
 
 export const SearchRequest = z.object({
   query: z.string(),
@@ -95,6 +114,7 @@ export const exported = {
   web_preserve_result: WebPreserveResult,
   extract_request: ExtractRequest,
   extraction: Extraction,
+  keyframes: Keyframes,
 } as const
 
 export const toJsonSchema = (schema: z.ZodType) =>

@@ -18,6 +18,10 @@ What exists: the capture panel on a global shortcut (default Cmd+Shift+Space) an
 
 What exists: the parse worker (`extract::text`) turns HTML, PDF, text, Markdown and `.eml` into fragments with selectors (block index, page plus box plus span, or character span); fragments carry a processing run; FTS5 indexes fragment text and titles; the Library searches as you type with a kind filter; the Item screen shows the source (readable HTML in a sandboxed frame, PDF pages, text, images) and highlights the selected fragment; `kernel::search` exposes the same search on the engine. Gate 2 record: `docs/gates/gate-2.md`.
 
+## Milestone M3: multimodal extraction
+
+What exists: the Python media worker transcribes audio and the audio track of video with whisper.cpp (`media::transcribe`, timed fragments), recognises text in images with Apple Vision (`media::ocr`, boxed fragments) and in image-only PDFs by rendering pages with pdfium (`media::ocr_pdf`), and cuts keyframes at scene changes with PyAV (`media::keyframes`). The Item screen plays audio and video with a transcript that seeks on click and follows playback, shows a keyframe strip, and draws OCR boxes on images. Gate 3 record: `docs/gates/gate-3.md`.
+
 ## Run it (macOS on Apple Silicon)
 
 ```bash
@@ -29,6 +33,13 @@ npm run gate0          # with the engine running: catalog, loopback, telemetry c
 ```
 
 `npm test` runs the unit tests, `npm run lint` runs Biome, `npm run contracts` regenerates `contracts/*.json`.
+
+## Deviations recorded in M3
+
+- OCR uses Apple Vision through pyobjc inside the Python worker instead of a separate Swift helper; Tesseract remains the portable fallback to add for other platforms.
+- Transcription is serialized inside the media worker: whisper.cpp contexts are not thread-safe.
+- Image and keyframe captions wait for the vision model in M5.
+- The media worker's runtime is a `python3 -m venv` with pinned wheels (`workers-py/media/requirements.txt`); `npm run setup` installs it and `npm run test:py` runs its tests.
 
 ## Deviations recorded in M2
 

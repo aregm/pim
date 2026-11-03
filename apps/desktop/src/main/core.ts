@@ -1,8 +1,14 @@
 import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { statSync, unlinkSync } from 'node:fs'
-import { basename, extname } from 'node:path'
-import { type CaptureRequest, Extraction, type Receipt, WebPreserveResult } from '@pim/contracts'
+import { mkdirSync, rmSync, statSync, unlinkSync } from 'node:fs'
+import { basename, extname, join } from 'node:path'
+import {
+  type CaptureRequest,
+  Extraction,
+  Keyframes,
+  type Receipt,
+  WebPreserveResult,
+} from '@pim/contracts'
 import { type ItemRow, type JobRow, Vault } from '@pim/vault'
 import type { IIIClient } from 'iii-sdk'
 
@@ -21,8 +27,15 @@ const MIME: Record<string, string> = {
   '.mp3': 'audio/mpeg',
   '.m4a': 'audio/mp4',
   '.wav': 'audio/wav',
+  '.aiff': 'audio/aiff',
+  '.aif': 'audio/aiff',
+  '.flac': 'audio/flac',
+  '.ogg': 'audio/ogg',
   '.mp4': 'video/mp4',
+  '.m4v': 'video/mp4',
   '.mov': 'video/quicktime',
+  '.webm': 'video/webm',
+  '.mkv': 'video/x-matroska',
 }
 export const mimeFor = (path: string) =>
   MIME[extname(path).toLowerCase()] ?? 'application/octet-stream'
@@ -178,6 +191,7 @@ export class Core extends EventEmitter {
       this.vault.completeJob(job.id)
       return
     }
+    const heartbeat = setInterval(() => this.vault.extendLease(job.id), 20_000)
     try {
       if (job.stage === 'extract') await this.extract(item)
       else if (item.source_kind === 'file') await this.preserveFile(item)
@@ -198,6 +212,8 @@ export class Core extends EventEmitter {
           message,
         }),
       )
+    } finally {
+      clearInterval(heartbeat)
     }
     this.emit('changed')
   }
@@ -249,33 +265,59 @@ export class Core extends EventEmitter {
       this.vault.db.prepare('UPDATE item SET title = ? WHERE id = ?').run(result.title, item.id)
   }
 
-  /** PRS-1: fragments from the payload the viewer shows; a re-run replaces, never duplicates. */
+  /** PRS-1 to PRS-4: fragments from the payload the viewer shows; the processor depends on the MIME type. */
   private async extract(item: ItemRow) {
-    if (item.source_kind === 'image') return
     const payloads = this.vault.payloads(item.id)
     const source =
       payloads.find((p) => p.role === 'normalized' && p.mime === 'text/html') ??
       payloads.find((p) => p.role === 'raw')
     if (!source) throw new Error('no payload to extract from')
-    const run = this.vault.startRun(item.id, 'extract::text', '0.2.0')
+    const path = this.vault.blobs.pathFor(source.blob_id)
+    const type = source.mime.split('/')[0]
+    if (type === 'audio' || type === 'video') {
+      await this.runProcessor(item, source.id, 'media::transcribe', '0.3.0', { path }, 1_800_000)
+      if (type === 'video') await this.keyframes(item, path)
+      return
+    }
+    if (type === 'image') {
+      await this.runProcessor(item, source.id, 'media::ocr', '0.3.0', { path }, 300_000)
+      return
+    }
+    const count = await this.runProcessor(
+      item,
+      source.id,
+      'extract::text',
+      '0.2.0',
+      { artifact_id: item.id, payload_id: source.id, mime: source.mime, path },
+      120_000,
+    )
+    // a PDF with no text layer is a scan: recognise the rendered pages
+    if (source.mime === 'application/pdf' && count === 0)
+      await this.runProcessor(item, source.id, 'media::ocr_pdf', '0.3.0', { path }, 900_000)
+  }
+
+  /** One processing run per worker call; fragments replace the processor's earlier ones. Returns the fragment count. */
+  private async runProcessor(
+    item: ItemRow,
+    payloadId: string,
+    processor: string,
+    version: string,
+    payload: unknown,
+    timeoutMs: number,
+  ) {
+    const run = this.vault.startRun(item.id, processor, version)
     try {
       const result = Extraction.parse(
-        await this.iii.trigger({
-          function_id: 'extract::text',
-          payload: {
-            artifact_id: item.id,
-            payload_id: source.id,
-            mime: source.mime,
-            path: this.vault.blobs.pathFor(source.blob_id),
-          },
-          timeoutMs: 120_000,
-        }),
+        await this.iii.trigger({ function_id: processor, payload, timeoutMs }),
       )
-      let target = source
+      let target = payloadId
       if (result.normalized_text !== undefined) {
         const stored = await this.vault.blobs.putBuffer(Buffer.from(result.normalized_text, 'utf8'))
-        target =
-          payloads.find((p) => p.role === 'normalized' && p.mime === 'text/plain') ??
+        const existing = this.vault
+          .payloads(item.id)
+          .find((p) => p.role === 'normalized' && p.mime === 'text/plain')
+        target = (
+          existing ??
           this.vault.addPayload(
             item.id,
             'normalized',
@@ -283,12 +325,54 @@ export class Core extends EventEmitter {
             'text/plain',
             stored.byte_length,
           )
+        ).id
       }
-      this.vault.replaceFragments(item.id, target.id, run, 'extract::text', result.fragments)
+      this.vault.replaceFragments(item.id, target, run, processor, result.fragments)
+      this.vault.finishRun(run)
+      return result.fragments.length
+    } catch (e) {
+      this.vault.finishRun(run, e instanceof Error ? e.message : String(e))
+      throw e
+    }
+  }
+
+  /** PRS-4: keyframes at scene changes, each a payload with its time in the index payload. */
+  private async keyframes(item: ItemRow, path: string) {
+    const run = this.vault.startRun(item.id, 'media::keyframes', '0.3.0')
+    const scratch = join(this.vault.dir, 'scratch', run)
+    mkdirSync(scratch, { recursive: true })
+    try {
+      const result = Keyframes.parse(
+        await this.iii.trigger({
+          function_id: 'media::keyframes',
+          payload: { path, scratch_dir: scratch, max_frames: 40 },
+          timeoutMs: 900_000,
+        }),
+      )
+      const index = []
+      for (const kf of result.keyframes) {
+        const stored = await this.vault.blobs.putFile(kf.path)
+        this.vault.addPayload(item.id, 'keyframe', stored.blob_id, 'image/jpeg', stored.byte_length)
+        index.push({ at_ms: kf.at_ms, blob_id: stored.blob_id })
+      }
+      const json = Buffer.from(
+        JSON.stringify({ duration_ms: result.duration_ms, keyframes: index }),
+        'utf8',
+      )
+      const stored = await this.vault.blobs.putBuffer(json)
+      this.vault.addPayload(
+        item.id,
+        'keyframes',
+        stored.blob_id,
+        'application/json',
+        stored.byte_length,
+      )
       this.vault.finishRun(run)
     } catch (e) {
       this.vault.finishRun(run, e instanceof Error ? e.message : String(e))
       throw e
+    } finally {
+      rmSync(scratch, { recursive: true, force: true })
     }
   }
 }
