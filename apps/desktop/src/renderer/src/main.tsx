@@ -3,6 +3,7 @@ import { StrictMode, useCallback, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { ItemView } from './pim.d.ts'
 import { CapturePanel } from './screens/CapturePanel.tsx'
+import { GraphScreen } from './screens/Graph.tsx'
 import { Inbox } from './screens/Inbox.tsx'
 import { Item } from './screens/Item.tsx'
 import { Library } from './screens/Library.tsx'
@@ -17,9 +18,15 @@ function App() {
   const [items, setItems] = useState<ItemView[]>([])
   const [open, setOpen] = useState<string | null>(null)
   const [focus, setFocus] = useState<string | null>(null)
+  const [graphFocus, setGraphFocus] = useState<{ kind: 'item' | 'entity'; id: string } | null>(null)
   const openItem = (id: string, fragment?: string | null) => {
     setFocus(fragment ?? null)
     setOpen(id)
+  }
+  const showInGraph = (id: string) => {
+    setGraphFocus({ kind: 'item', id })
+    setOpen(null)
+    setScreen('Graph')
   }
   const [workers, setWorkers] = useState<string[] | null>(null)
   const [dropNote, setDropNote] = useState<string | null>(null)
@@ -117,14 +124,25 @@ function App() {
             >
               ← back
             </button>
-            <Item item={current} focusFragment={focus} />
+            <Item
+              item={current}
+              focusFragment={focus}
+              onShowInGraph={showInGraph}
+              onOpenItem={openItem}
+            />
           </>
         ) : (
           <>
             <h1 style={{ marginTop: 0 }}>{screen}</h1>
             {screen === 'Inbox' && <Inbox items={items} onOpen={openItem} />}
             {screen === 'Library' && <Library items={items} onOpen={openItem} />}
-            {screen === 'Graph' && <p style={{ color: colors.muted }}>The graph arrives in M4.</p>}
+            {screen === 'Graph' && (
+              <GraphScreen
+                focus={graphFocus ?? (items[0] ? { kind: 'item', id: items[0].id } : null)}
+                onOpenItem={openItem}
+                onFocus={setGraphFocus}
+              />
+            )}
             {screen === 'Settings' && <Settings />}
           </>
         )}

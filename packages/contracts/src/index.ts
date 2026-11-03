@@ -68,7 +68,8 @@ export const Selector = z.discriminatedUnion('kind', [
     kind: z.literal('char'),
     start: z.number().int().nonnegative(),
     end: z.number().int().nonnegative(),
-  }),  z.object({
+  }),
+  z.object({
     kind: z.literal('time'),
     start_ms: z.number().int().nonnegative(),
     end_ms: z.number().int().nonnegative(),
@@ -99,6 +100,20 @@ export const Keyframes = z.object({
   duration_ms: z.number().int().nonnegative(),
 })
 export type Keyframes = z.infer<typeof Keyframes>
+
+export const NodeRef = z.object({ kind: z.enum(['item', 'entity']), id: z.string() })
+export const NeighbourhoodRequest = z.object({
+  node: NodeRef,
+  budget: z.number().int().positive().max(1000).optional(),
+  include_suggested: z.boolean().optional(),
+  predicates: z.array(z.string()).optional(),
+  max_hops: z.number().int().positive().max(5).optional(),
+})
+export const ReviewRequest = z.object({
+  relation_id: z.string(),
+  status: z.enum(['accepted', 'rejected']),
+})
+export const TagRequest = z.object({ item_id: z.string(), label: z.string().min(1).max(80) })
 
 export const SearchRequest = z.object({
   query: z.string(),

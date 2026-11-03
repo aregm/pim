@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { mkdirSync, rmSync, statSync, unlinkSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, statSync, unlinkSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import {
   type CaptureRequest,
@@ -158,9 +158,15 @@ export class Core extends EventEmitter {
     this.emit('changed')
   }
 
+  requeue(itemId: string, stage: string) {
+    this.vault.requeue(itemId, stage)
+  }
+
   start() {
-    const added = this.vault.backfill('extract')
-    if (added) console.log(JSON.stringify({ event: 'jobs.backfill', stage: 'extract', added }))
+    for (const stage of ['extract', 'link']) {
+      const added = this.vault.backfill(stage)
+      if (added) console.log(JSON.stringify({ event: 'jobs.backfill', stage, added }))
+    }
     this.timer = setInterval(() => void this.tick(), 1000)
     void this.tick()
   }
@@ -176,7 +182,10 @@ export class Core extends EventEmitter {
 
   private async tick() {
     while (this.running < 2) {
-      const job = this.vault.claimJob('preserve') ?? this.vault.claimJob('extract')
+      const job =
+        this.vault.claimJob('preserve') ??
+        this.vault.claimJob('extract') ??
+        this.vault.claimJob('link')
       if (!job) return
       this.running++
       void this.run(job).finally(() => {
@@ -194,11 +203,13 @@ export class Core extends EventEmitter {
     const heartbeat = setInterval(() => this.vault.extendLease(job.id), 20_000)
     try {
       if (job.stage === 'extract') await this.extract(item)
+      else if (job.stage === 'link') await this.link(item)
       else if (item.source_kind === 'file') await this.preserveFile(item)
       else if (item.source_kind === 'url') await this.preserveUrl(item)
       this.vault.completeJob(job.id)
       if (job.stage === 'preserve' && this.vault.item(item.id)?.state === 'preserved')
         this.vault.enqueue(item.id, 'extract')
+      if (job.stage === 'extract') this.vault.requeue(item.id, 'link')
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
       const state = this.vault.failJob(job.id, message)
@@ -373,6 +384,144 @@ export class Core extends EventEmitter {
       throw e
     } finally {
       rmSync(scratch, { recursive: true, force: true })
+    }
+  }
+
+  // ---- GRA-2: deterministic link candidates, each with its generator, score parts and evidence ----
+
+  private async link(item: ItemRow) {
+    if (item.state === 'duplicate') return
+    const run = this.vault.startRun(item.id, 'link::candidates', '0.4.0')
+    try {
+      const me = { kind: 'item' as const, id: item.id }
+      const skip = (id: string) => id === item.id || this.vault.item(id)?.state === 'duplicate'
+      // 1. explicit links in the readable HTML to pages that are also in the vault
+      const htmlPayloads = this.vault.payloads(item.id)
+      const readable =
+        htmlPayloads.find((p) => p.role === 'normalized' && p.mime === 'text/html') ??
+        htmlPayloads.find((p) => p.role === 'raw' && p.mime === 'text/html')
+      if (readable) {
+        const html = readFileSync(this.vault.blobs.pathFor(readable.blob_id), 'utf8')
+        const seen = new Set<string>()
+        for (const m of html.matchAll(/href=["']([^"']+)["']/g)) {
+          const target = this.vault.itemForUrl(m[1] ?? '')
+          if (!target || skip(target) || seen.has(target)) continue
+          seen.add(target)
+          this.vault.graph.addRelation({
+            subject: me,
+            predicate: 'related_to',
+            object: { kind: 'item', id: target },
+            author: 'link::explicit_link',
+            generator: 'explicit_link',
+            score: 1,
+            score_json: { href: m[1] },
+            run_id: run,
+          })
+        }
+      }
+      // 2. shared rare terms: score = sum of 1/doc over shared terms; evidence from both ends
+      const scores = new Map<string, { score: number; terms: string[]; evidence: Set<string> }>()
+      for (const t of this.vault.rareTerms(item.id)) {
+        for (const other of this.vault.artifactsWithTerm(t.term, item.id)) {
+          if (skip(other.artifact_id)) continue
+          const entry = scores.get(other.artifact_id) ?? {
+            score: 0,
+            terms: [],
+            evidence: new Set<string>(),
+          }
+          entry.score += 1 / t.doc
+          entry.terms.push(t.term)
+          entry.evidence.add(t.fragment_id)
+          entry.evidence.add(other.fragment_id)
+          scores.set(other.artifact_id, entry)
+        }
+      }
+      const ranked = [...scores.entries()]
+        .filter(([, v]) => v.terms.length >= 2 || v.score >= 0.5)
+        .sort((a, b) => b[1].score - a[1].score)
+        .slice(0, 10)
+      for (const [other, v] of ranked)
+        this.vault.graph.addRelation({
+          subject: me,
+          predicate: 'related_to',
+          object: { kind: 'item', id: other },
+          author: 'link::shared_terms',
+          generator: 'shared_terms',
+          score: Math.round(v.score * 1000) / 1000,
+          score_json: { terms: v.terms.slice(0, 8) },
+          run_id: run,
+          evidence: [...v.evidence].filter(Boolean),
+        })
+      // 3. captured within ten minutes of each other, a weak signal
+      for (const near of this.vault
+        .capturedNear(item.id, 10 * 60_000)
+        .sort((a, b) => a.minutes - b.minutes)
+        .slice(0, 5)) {
+        if (skip(near.artifact_id)) continue
+        this.vault.graph.addRelation({
+          subject: me,
+          predicate: 'related_to',
+          object: { kind: 'item', id: near.artifact_id },
+          author: 'link::co_capture',
+          generator: 'co_capture',
+          score: 0.1,
+          score_json: { minutes_apart: Math.round(near.minutes * 10) / 10 },
+          run_id: run,
+        })
+      }
+      this.vault.finishRun(run)
+    } catch (e) {
+      this.vault.finishRun(run, e instanceof Error ? e.message : String(e))
+      throw e
+    }
+  }
+
+  // ---- review: the only way a relation becomes accepted (ADR-005) ----
+
+  review(relationId: string, status: 'accepted' | 'rejected') {
+    this.vault.graph.setStatus(relationId, status)
+    this.emit('changed')
+  }
+
+  tag(itemId: string, label: string) {
+    const entity = this.vault.graph.upsertEntity('tag', label)
+    const r = this.vault.graph.addRelation({
+      subject: { kind: 'item', id: itemId },
+      predicate: 'tagged',
+      object: { kind: 'entity', id: entity.id },
+      author: 'user',
+      status: 'accepted',
+    })
+    if (r.status !== 'accepted') this.vault.graph.setStatus(r.id, 'accepted')
+    this.emit('changed')
+    return entity
+  }
+
+  untag(relationId: string) {
+    this.vault.graph.deleteRelation(relationId)
+    this.emit('changed')
+  }
+
+  /** Relations of an item with their evidence and the other end's label, for the Item screen and the inbox. */
+  relations(itemId: string) {
+    return this.vault.graph.relationsOf({ kind: 'item', id: itemId }).map((r) => this.describe(r))
+  }
+
+  suggestions() {
+    return this.vault.graph.suggestions().map((r) => this.describe(r))
+  }
+
+  private describe(r: ReturnType<Vault['graph']['relation']> & object) {
+    const label = (kind: 'item' | 'entity', id: string) =>
+      kind === 'item'
+        ? (this.vault.item(id)?.title ?? id)
+        : (this.vault.graph.entity(id)?.name ?? id)
+    return {
+      ...r,
+      score_json: r.score_json ? JSON.parse(r.score_json) : null,
+      subject_label: label(r.subject_kind, r.subject_id),
+      object_label: label(r.object_kind, r.object_id),
+      evidence: this.vault.graph.evidence(r.id),
     }
   }
 }

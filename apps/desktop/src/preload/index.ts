@@ -9,6 +9,16 @@ contextBridge.exposeInMainWorld('pim', {
   payloads: (id: string) => ipcRenderer.invoke('items:payloads', id),
   fragments: (id: string) => ipcRenderer.invoke('items:fragments', id),
   search: (query: string) => ipcRenderer.invoke('items:search', query),
+  relations: (id: string) => ipcRenderer.invoke('items:relations', id),
+  suggestions: () => ipcRenderer.invoke('items:suggestions'),
+  tags: (id: string) => ipcRenderer.invoke('items:tags', id),
+  pin: (id: string, pinned: boolean) => ipcRenderer.invoke('items:pin', id, pinned),
+  neighbourhood: (q: unknown) => ipcRenderer.invoke('graph:neighbourhood', q),
+  review: (relationId: string, status: 'accepted' | 'rejected') =>
+    ipcRenderer.invoke('review:relation', { relation_id: relationId, status }),
+  tag: (itemId: string, label: string) =>
+    ipcRenderer.invoke('review:tag', { item_id: itemId, label }),
+  untag: (relationId: string) => ipcRenderer.invoke('review:untag', relationId),
   blobUrl: (blobId: string) => `pim-blob://${blobId.replace(/^sha256:/, '')}/`,
   retry: (id: string) => ipcRenderer.invoke('items:retry', id),
   openSource: (id: string) => ipcRenderer.invoke('source:open', id),

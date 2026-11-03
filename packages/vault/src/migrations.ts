@@ -102,4 +102,44 @@ END;
 INSERT INTO item_fts(rowid, title) SELECT rowid, COALESCE(title, '') FROM item;
 `,
   },
+  {
+    version: 3,
+    sql: `
+ALTER TABLE item ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE entity (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  normalized TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(kind, normalized)
+);
+CREATE TABLE relation (
+  id TEXT PRIMARY KEY,
+  subject_kind TEXT NOT NULL,
+  subject_id TEXT NOT NULL,
+  predicate TEXT NOT NULL,
+  object_kind TEXT NOT NULL,
+  object_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  author TEXT NOT NULL,
+  generator TEXT,
+  score REAL,
+  score_json TEXT,
+  run_id TEXT REFERENCES processing_run(id),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(subject_kind, subject_id, predicate, object_kind, object_id, author)
+);
+CREATE INDEX relation_subject ON relation(subject_kind, subject_id, status);
+CREATE INDEX relation_object ON relation(object_kind, object_id, status);
+CREATE TABLE relation_evidence (
+  relation_id TEXT NOT NULL REFERENCES relation(id),
+  fragment_id TEXT NOT NULL REFERENCES fragment(id),
+  role TEXT NOT NULL DEFAULT 'support',
+  PRIMARY KEY(relation_id, fragment_id, role)
+);
+CREATE VIRTUAL TABLE fragment_vocab USING fts5vocab('fragment_fts', 'row');
+`,
+  },
 ]

@@ -22,6 +22,10 @@ What exists: the parse worker (`extract::text`) turns HTML, PDF, text, Markdown 
 
 What exists: the Python media worker transcribes audio and the audio track of video with whisper.cpp (`media::transcribe`, timed fragments), recognises text in images with Apple Vision (`media::ocr`, boxed fragments) and in image-only PDFs by rendering pages with pdfium (`media::ocr_pdf`), and cuts keyframes at scene changes with PyAV (`media::keyframes`). The Item screen plays audio and video with a transcript that seeks on click and follows playback, shows a keyframe strip, and draws OCR boxes on images. Gate 3 record: `docs/gates/gate-3.md`.
 
+## Milestone M4: knowledge graph
+
+What exists: entities and typed relations with evidence and status (schema v3); three deterministic link generators that run as a `link` stage after extraction (explicit links between captured pages, shared rare terms through the FTS5 vocabulary, captures close in time); a budgeted neighbourhood query that says why each node is visible; `kernel::neighborhood`, `kernel::relations`, `kernel::review`, `kernel::tag` on the engine; the Graph screen on Sigma.js with dimension toggles, an edge card answering the five questions, drag to pin, refocus, and table and timeline projections; tags and connections on the Item screen; and inbox triage of suggestions with the keyboard. Gate 4 record: `docs/gates/gate-4.md`.
+
 ## Run it (macOS on Apple Silicon)
 
 ```bash
@@ -33,6 +37,12 @@ npm run gate0          # with the engine running: catalog, loopback, telemetry c
 ```
 
 `npm test` runs the unit tests, `npm run lint` runs Biome, `npm run contracts` regenerates `contracts/*.json`.
+
+## Deviations recorded in M4
+
+- Link candidates are computed in the core from the vault, and the layout runs in the renderer; the planned link-and-layout worker is not needed at this size.
+- Model-extracted entities and captions arrive in M5; v0.1 entities are tags the person adds.
+- Clusters beyond the budget (GRA-4) are not drawn yet; the view reports how many nodes it hid.
 
 ## Deviations recorded in M3
 
