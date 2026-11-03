@@ -16,6 +16,11 @@ function App() {
   const [screen, setScreen] = useState<Screen>('Inbox')
   const [items, setItems] = useState<ItemView[]>([])
   const [open, setOpen] = useState<string | null>(null)
+  const [focus, setFocus] = useState<string | null>(null)
+  const openItem = (id: string, fragment?: string | null) => {
+    setFocus(fragment ?? null)
+    setOpen(id)
+  }
   const [workers, setWorkers] = useState<string[] | null>(null)
   const [dropNote, setDropNote] = useState<string | null>(null)
   const refresh = useCallback(() => void window.pim.items().then(setItems), [])
@@ -86,7 +91,16 @@ function App() {
           {dropNote && <div style={{ color: colors.accent }}>{dropNote}</div>}
         </div>
       </nav>
-      <main style={{ flex: 1, padding: 24, overflow: 'auto' }}>
+      <main
+        style={{
+          flex: 1,
+          padding: 24,
+          overflow: 'auto',
+          display: 'flex',
+          flexDirection: 'column',
+          minWidth: 0,
+        }}
+      >
         {current ? (
           <>
             <button
@@ -103,13 +117,13 @@ function App() {
             >
               ← back
             </button>
-            <Item item={current} />
+            <Item item={current} focusFragment={focus} />
           </>
         ) : (
           <>
             <h1 style={{ marginTop: 0 }}>{screen}</h1>
-            {screen === 'Inbox' && <Inbox items={items} onOpen={setOpen} />}
-            {screen === 'Library' && <Library items={items} onOpen={setOpen} />}
+            {screen === 'Inbox' && <Inbox items={items} onOpen={openItem} />}
+            {screen === 'Library' && <Library items={items} onOpen={openItem} />}
             {screen === 'Graph' && <p style={{ color: colors.muted }}>The graph arrives in M4.</p>}
             {screen === 'Settings' && <Settings />}
           </>

@@ -14,6 +14,10 @@ v0.1 vaults are not encrypted (ADR-004). Nothing leaves the machine: the engine 
 
 What exists: the capture panel on a global shortcut (default Cmd+Shift+Space) and a menu bar item, paste, drop and clipboard capture, watched folders, a loopback capture endpoint through iii's `http` worker, the vault (SQLite through `node:sqlite`, content-addressed blobs), durable receipts with a job runner for preservation, a web-preserve worker (its own Electron process: readable HTML, full-page screenshot, metadata), and the Inbox, Library, Item and Settings screens. Gate 1 record: `docs/gates/gate-1.md`.
 
+## Milestone M2: item view and search
+
+What exists: the parse worker (`extract::text`) turns HTML, PDF, text, Markdown and `.eml` into fragments with selectors (block index, page plus box plus span, or character span); fragments carry a processing run; FTS5 indexes fragment text and titles; the Library searches as you type with a kind filter; the Item screen shows the source (readable HTML in a sandboxed frame, PDF pages, text, images) and highlights the selected fragment; `kernel::search` exposes the same search on the engine. Gate 2 record: `docs/gates/gate-2.md`.
+
 ## Run it (macOS on Apple Silicon)
 
 ```bash
@@ -25,6 +29,11 @@ npm run gate0          # with the engine running: catalog, loopback, telemetry c
 ```
 
 `npm test` runs the unit tests, `npm run lint` runs Biome, `npm run contracts` regenerates `contracts/*.json`.
+
+## Deviations recorded in M2
+
+- The parse worker reads a blob by path, read-only, on the same machine; bytes do not cross the bus. Workers still never write the vault.
+- The web viewer blocks scripts, navigation and remote images; captured pages show their text and local structure only.
 
 ## Deviations recorded in M1
 

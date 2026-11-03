@@ -59,4 +59,47 @@ CREATE TABLE job (
 CREATE INDEX job_open ON job(state, next_run_at);
 `,
   },
+  {
+    version: 2,
+    sql: `
+CREATE TABLE processing_run (
+  id TEXT PRIMARY KEY,
+  artifact_id TEXT NOT NULL REFERENCES artifact(item_id),
+  processor TEXT NOT NULL,
+  version TEXT NOT NULL,
+  status TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  error TEXT
+);
+CREATE INDEX processing_run_artifact ON processing_run(artifact_id);
+CREATE TABLE fragment (
+  id TEXT PRIMARY KEY,
+  artifact_id TEXT NOT NULL REFERENCES artifact(item_id),
+  payload_id TEXT NOT NULL REFERENCES artifact_payload(id),
+  run_id TEXT NOT NULL REFERENCES processing_run(id),
+  ordinal INTEGER NOT NULL,
+  selector_json TEXT NOT NULL,
+  text TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX fragment_artifact ON fragment(artifact_id, ordinal);
+CREATE VIRTUAL TABLE fragment_fts USING fts5(text, content='fragment', content_rowid='rowid', tokenize='unicode61 remove_diacritics 2');
+CREATE TRIGGER fragment_ai AFTER INSERT ON fragment BEGIN
+  INSERT INTO fragment_fts(rowid, text) VALUES (new.rowid, new.text);
+END;
+CREATE TRIGGER fragment_ad AFTER DELETE ON fragment BEGIN
+  INSERT INTO fragment_fts(fragment_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+END;
+CREATE VIRTUAL TABLE item_fts USING fts5(title, content='item', content_rowid='rowid', tokenize='unicode61 remove_diacritics 2');
+CREATE TRIGGER item_ai AFTER INSERT ON item BEGIN
+  INSERT INTO item_fts(rowid, title) VALUES (new.rowid, COALESCE(new.title, ''));
+END;
+CREATE TRIGGER item_au AFTER UPDATE OF title ON item BEGIN
+  INSERT INTO item_fts(item_fts, rowid, title) VALUES ('delete', old.rowid, COALESCE(old.title, ''));
+  INSERT INTO item_fts(rowid, title) VALUES (new.rowid, COALESCE(new.title, ''));
+END;
+INSERT INTO item_fts(rowid, title) SELECT rowid, COALESCE(title, '') FROM item;
+`,
+  },
 ]

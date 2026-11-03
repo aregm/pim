@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { Vault } from './index.ts'
+import { toFtsQuery, Vault } from './index.ts'
 
 let dir: string
 let vault: Vault
@@ -17,11 +17,11 @@ afterEach(() => {
 
 describe('schema', () => {
   it('migrates an empty vault to the current version and reopens a populated one', () => {
-    expect(vault.schemaVersion).toBe(1)
+    expect(vault.schemaVersion).toBe(2)
     vault.receipt({ source_kind: 'text', source_id: 'sha256:a', surface: 'test' })
     vault.close()
     const again = new Vault(dir)
-    expect(again.schemaVersion).toBe(1)
+    expect(again.schemaVersion).toBe(2)
     expect(again.items()).toHaveLength(1)
     again.close()
     vault = new Vault(dir)
@@ -97,5 +97,48 @@ describe('jobs', () => {
     const again = vault.claimJob('preserve')
     vault.completeJob(again?.id ?? '')
     expect(vault.jobs(r.item_id)[0]?.state).toBe('done')
+  })
+})
+
+describe('fragments and search', () => {
+  it('stores fragments under a run, replaces on re-run, and finds items by phrase prefix', () => {
+    const r = vault.receipt({
+      source_kind: 'text',
+      source_id: 'sha256:t',
+      title: 'Meeting notes',
+      surface: 's',
+    })
+    const payload = vault.addPayload(r.item_id, 'raw', 'sha256:t', 'text/plain', 10)
+    const run1 = vault.startRun(r.item_id, 'extract::text', '0.1.0')
+    vault.replaceFragments(r.item_id, payload.id, run1, 'extract::text', [
+      {
+        ordinal: 0,
+        selector: { kind: 'char', start: 0, end: 20 },
+        text: 'Budget approved for the kiosk rollout',
+      },
+      { ordinal: 1, selector: { kind: 'char', start: 21, end: 40 }, text: 'Next review on Friday' },
+    ])
+    vault.finishRun(run1)
+    const run2 = vault.startRun(r.item_id, 'extract::text', '0.1.1')
+    vault.replaceFragments(r.item_id, payload.id, run2, 'extract::text', [
+      {
+        ordinal: 0,
+        selector: { kind: 'char', start: 0, end: 20 },
+        text: 'Budget approved for the kiosk rollout',
+      },
+    ])
+    expect(vault.fragments(r.item_id)).toHaveLength(1)
+    const hits = vault.search('kiosk roll')
+    expect(hits).toHaveLength(1)
+    expect(hits[0]?.item_id).toBe(r.item_id)
+    expect(hits[0]?.snippet).toContain('[kiosk]')
+    expect(vault.search('meeting')[0]?.item_id).toBe(r.item_id) // title match
+    expect(vault.search('nothing-here')).toHaveLength(0)
+    expect(vault.search('')).toHaveLength(0)
+  })
+  it('builds safe FTS queries', () => {
+    expect(toFtsQuery('kiosk roll')).toBe('"kiosk"* "roll"*')
+    expect(toFtsQuery('"exact phrase" other')).toBe('"exact phrase" "other"*')
+    expect(toFtsQuery('a-b (c)')).toBe('"ab"* "c"*')
   })
 })
