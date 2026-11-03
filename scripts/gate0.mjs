@@ -9,7 +9,10 @@ const expected = ['parse', 'media', ...(process.argv.includes('--with-desktop') 
 const failures = []
 
 const listing = JSON.parse(
-  execFileSync(iii, ['trigger', 'engine::workers::list'], { encoding: 'utf8', env: { ...process.env, III_URL: 'ws://127.0.0.1:49140' } }),
+  execFileSync(iii, ['trigger', 'engine::workers::list'], {
+    encoding: 'utf8',
+    env: { ...process.env, III_URL: 'ws://127.0.0.1:49140' },
+  }),
 )
 const names = (listing.workers ?? []).map((w) => w.name)
 for (const name of expected)

@@ -1,0 +1,18 @@
+# Gate 1: five real captures
+
+**Run:** 2026-11-03, on the reference Mac (Apple Silicon, macOS 27.0.1, Node 26.12.0, Electron 45.2.1 with Node 24.22.1, Python 3.12.2), commit: the M1 commit.
+
+| Check | Result |
+| --- | --- |
+| Five captures reach `preserved`: a Wikipedia page, a text note, a PDF, a PNG, a 300 MB file | PASS: the page with raw HTML, readable HTML, full-page screenshot and metadata payloads (5.9 MB); the others with one raw payload each |
+| Receipt latency through the engine (`kernel::receipt`, measured by a client worker) | PASS: 23 ms for the URL, 11 ms for text (hashed and stored at once), 1 ms for each file |
+| Repeated capture collapses (CAP-3) | PASS: the URL and the PDF captured twice show one artifact with two capture events and `existing: true` |
+| Same bytes from another path | PASS: a copy of the PDF dropped in a watched folder is marked `duplicate` of the first |
+| Window stays responsive during a large copy (UI-2) | PASS by proxy: ten `kernel::ping` calls during the 300 MB preservation answered in 1 to 3 ms, so the core's event loop was not blocked; the copy runs as a job with streams |
+| Loopback endpoint (CAP-4) | PASS: `POST /capture` on 127.0.0.1:3111 answers 401 without the secret, 400 for a bad body, 200 with a receipt; the http worker listens on loopback only |
+| Watched folder | PASS: two files dropped into a configured folder were captured with surface `folder` |
+| Lint, unit tests (7), type-check, app build | PASS |
+| Capture panel, global shortcut, menu bar item, clipboard capture, drag and drop onto the window | NOT VERIFIED by automation: wired and built, but only exercised by hand; see the README for how to try them |
+| CI | NOT VERIFIED: no GitHub remote yet |
+
+Notes: the http worker's stored configuration (`.iii/config/pim-http.yaml`) kept host 0.0.0.0 from its first boot; `config_override` in the compose file did not change a running worker, so the host was set once through `configuration::set` and now hot-reloads. The web-preserve worker needed software rendering and offscreen capture; the GPU process crashed on tall pages otherwise.
