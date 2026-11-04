@@ -1,5 +1,5 @@
 import type { CSSProperties, ReactNode } from 'react'
-import type { ItemView } from './pim.d.ts'
+import type { ItemView, Selector } from './pim.d.ts'
 
 export const colors = {
   border: '#dcdcdc',
@@ -64,6 +64,17 @@ export const Button = ({
 export const kindLabel = (item: ItemView) =>
   ({ url: 'web', text: 'text', file: 'file', image: 'image' })[item.source_kind]
 export const when = (iso: string) => new Date(iso).toLocaleString()
+/** Where a fragment sits in its item, short enough for a list row. */
+export const where = (s: Selector) =>
+  s.kind === 'page'
+    ? `p. ${s.page}`
+    : s.kind === 'time'
+      ? `${Math.floor(s.start_ms / 60000)}:${String(Math.floor(s.start_ms / 1000) % 60).padStart(2, '0')}`
+      : s.kind === 'block'
+        ? `¶ ${s.index + 1}`
+        : s.kind === 'char'
+          ? `chars ${s.start}–${s.end}`
+          : 'region'
 
 /** Turns dropped files, URLs or text into capture requests and sends them. Shared by the panel and the main window. */
 export async function captureDrop(dt: DataTransfer, surface: string) {
