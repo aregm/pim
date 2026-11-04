@@ -1,8 +1,9 @@
 // biome-ignore-all lint/a11y/noStaticElementInteractions: the whole surface is a drop target by design (UI-1)
 import { StrictMode, useCallback, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { ItemView } from './pim.d.ts'
+import type { ItemView, SettingsView } from './pim.d.ts'
 import { CapturePanel } from './screens/CapturePanel.tsx'
+import { FirstRun } from './screens/FirstRun.tsx'
 import { GraphScreen } from './screens/Graph.tsx'
 import { Inbox } from './screens/Inbox.tsx'
 import { Item } from './screens/Item.tsx'
@@ -30,9 +31,11 @@ function App() {
   }
   const [workers, setWorkers] = useState<string[] | null>(null)
   const [dropNote, setDropNote] = useState<string | null>(null)
+  const [settings, setSettings] = useState<SettingsView | null>(null)
   const refresh = useCallback(() => void window.pim.items().then(setItems), [])
   useEffect(() => {
     refresh()
+    void window.pim.settings().then(setSettings)
     const off = window.pim.onItemsChanged(refresh)
     const poll = () => window.pim.engineWorkers().then(setWorkers, () => setWorkers(null))
     void poll()
@@ -53,6 +56,31 @@ function App() {
     setTimeout(() => setDropNote(null), 2500)
   }
   const current = open ? items.find((i) => i.id === open) : undefined
+  if (settings && !settings.firstRunDone)
+    return (
+      <div
+        onDrop={drop}
+        onDragOver={(e) => e.preventDefault()}
+        style={{ height: '100vh', overflow: 'auto', fontFamily: 'system-ui' }}
+      >
+        <FirstRun
+          settings={settings}
+          items={items}
+          onSettings={setSettings}
+          onDone={() =>
+            void window.pim.firstRunDone().then((s) => {
+              setSettings(s)
+              setScreen('Library')
+            })
+          }
+        />
+        {dropNote && (
+          <div style={{ position: 'fixed', bottom: 16, left: 24, color: colors.accent }}>
+            {dropNote}
+          </div>
+        )}
+      </div>
+    )
   return (
     <div
       onDrop={drop}

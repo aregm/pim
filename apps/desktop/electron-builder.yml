@@ -1,0 +1,27 @@
+# npm run package: an unsigned, un-notarised PIM.app and DMG for Apple Silicon (spec D11; signing is v0.2).
+appId: dev.pim.desktop
+productName: PIM
+copyright: Areg Melik-Adamyan
+directories:
+  output: dist
+asar: false
+files:
+  - out/**
+  - package.json
+extraResources:
+  - from: runtime
+    to: runtime
+mac:
+  target:
+    - target: dir
+      arch: [arm64]
+    - target: dmg
+      arch: [arm64]
+  category: public.app-category.productivity
+  identity: null
+  hardenedRuntime: false
+  minimumSystemVersion: "14.0"
+dmg:
+  sign: false
+npmRebuild: false
+electronLanguages: [en]

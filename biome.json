@@ -6,6 +6,7 @@
       "!**/node_modules",
       "!**/out",
       "!**/dist",
+      "!apps/desktop/runtime",
       "!**/.tooling",
       "!**/.iii",
       "!contracts/*.json"

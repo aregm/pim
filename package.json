@@ -16,11 +16,14 @@
     "format": "biome format --write .",
     "test": "vitest run",
     "gate0": "node scripts/gate0.mjs",
-    "test:py": ".tooling/py/bin/python -m unittest discover -s workers-py/media/tests"
+    "test:py": ".tooling/py/bin/python -m unittest discover -s workers-py/media/tests",
+    "package": "npm run package -w apps/desktop",
+    "rehearsal": "node tests/e2e/rehearsal.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.4",
     "@types/node": "26.6.6",
+    "playwright-core": "^1.64.1",
     "typescript": "^5.9.0",
     "vitest": "5.1.0"
   },

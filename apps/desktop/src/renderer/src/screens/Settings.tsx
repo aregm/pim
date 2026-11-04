@@ -1,6 +1,14 @@
 import { useEffect, useState } from 'react'
-import type { ModelsStatus, SettingsView, WatchedFolder } from '../pim.d.ts'
-import { Button, colors } from '../ui.tsx'
+import type { ModelsStatus, SettingsView, VerifyReport, WatchedFolder } from '../pim.d.ts'
+import { Button, colors, when } from '../ui.tsx'
+import { useRuntimeStatus, WhatWorks } from './Runtime.tsx'
+
+const kb = (n: number) =>
+  n < 1048576 ? `${Math.round(n / 1024)} kB` : `${(n / 1048576).toFixed(1)} MB`
+const verdict = (r: VerifyReport) =>
+  `${r.ok ? 'passed' : 'FAILED'}: ${r.items} items, ${r.payloads} attachments${
+    r.missing_blobs.length ? `, ${r.missing_blobs.length} missing` : ''
+  }${r.search ? `, search for "${r.search.query}" ${r.search.found ? 'found it' : 'found nothing'}` : ''}`
 
 export function Settings() {
   const [s, setS] = useState<SettingsView | null>(null)
@@ -9,11 +17,18 @@ export function Settings() {
   const [shortcut, setShortcut] = useState('')
   const [models, setModels] = useState<ModelsStatus | null>(null)
   const [names, setNames] = useState({ embed: '', text: '', vision: '' })
+  const [python, setPython] = useState('')
+  const [note, setNote] = useState<Record<string, string>>({})
+  const runtime = useRuntimeStatus(5000)
+  const say = (key: string, text: string) => setNote((n) => ({ ...n, [key]: text }))
+  const fail = (key: string) => (e: unknown) =>
+    say(key, `failed: ${e instanceof Error ? e.message : String(e)}`)
   useEffect(() => {
     void window.pim.settings().then((v) => {
       setS(v)
       setShortcut(v.shortcut)
       setNames(v.models)
+      setPython(v.pythonRuntime ?? '')
     })
     const poll = () => void window.pim.modelsStatus(true).then(setModels)
     poll()
@@ -33,12 +48,130 @@ export function Settings() {
   return (
     <div style={{ maxWidth: 720, fontSize: 14 }}>
       <h3>Vault</h3>
-      <p>
-        <code>{s.vaultDir}</code>
-        <br />
-        <span style={{ color: colors.muted, fontSize: 12 }}>
-          Not encrypted in v0.1 (ADR-004); FileVault protects the disk.
-        </span>
+      <div style={row}>
+        <code style={{ flex: 1 }}>{s.vaultDir}</code>
+        <Button
+          onClick={() =>
+            void window.pim
+              .switchVault()
+              .then((v) => {
+                if (v) {
+                  setS(v)
+                  say('vault', `now using ${v.vaultDir}`)
+                }
+              })
+              .catch(fail('vault'))
+          }
+        >
+          Change folder…
+        </Button>
+      </div>
+      <p style={{ color: colors.muted, fontSize: 12, margin: '0 0 8px' }}>
+        An empty folder starts a new vault; a folder with a vault opens it. Not encrypted in v0.1
+        (ADR-004); FileVault protects the disk.
+        {note.vault && <span style={{ color: colors.accent }}> {note.vault}</span>}
+      </p>
+      <h3>Backup</h3>
+      <div style={row}>
+        <Button
+          onClick={() =>
+            void window.pim
+              .backup()
+              .then((r) => {
+                if (!r) return
+                say(
+                  'backup',
+                  `backed up ${r.manifest.items} items, ${kb(r.manifest.bytes)} of attachments, into ${r.dir}`,
+                )
+                void window.pim.settings().then(setS)
+              })
+              .catch(fail('backup'))
+          }
+        >
+          Back up now…
+        </Button>
+        <Button
+          onClick={() =>
+            void window.pim
+              .testRestore()
+              .then((r) => {
+                if (r)
+                  say(
+                    'restore',
+                    `restore test ${verdict(r.report)} (backup of ${when(r.manifest.created_at)})`,
+                  )
+              })
+              .catch(fail('restore'))
+          }
+        >
+          Test a restore…
+        </Button>
+        <Button
+          onClick={() =>
+            void window.pim
+              .restore()
+              .then((r) => {
+                if (!r) return
+                say(
+                  'restore',
+                  `restored into ${r.target}: ${verdict(r.report)}${r.switched ? '; the app now uses it' : '; the app keeps the current vault'}`,
+                )
+                void window.pim.settings().then(setS)
+              })
+              .catch(fail('restore'))
+          }
+        >
+          Restore into a new folder…
+        </Button>
+      </div>
+      <p style={{ color: colors.muted, fontSize: 12, margin: '0 0 8px' }}>
+        {s.lastBackup
+          ? `Last backup ${when(s.lastBackup.at)} in ${s.lastBackup.dir}.`
+          : 'No backup yet.'}{' '}
+        A backup is a folder with a copy of the database and every attachment; a restore test opens
+        one in a temporary folder, checks every attachment and runs a search.
+        {note.backup && <span style={{ color: colors.accent }}> {note.backup}</span>}
+        {note.restore && <span style={{ color: colors.accent }}> {note.restore}</span>}
+      </p>
+      <h3>Export and import</h3>
+      <div style={row}>
+        <Button
+          onClick={() =>
+            void window.pim
+              .exportItems(null)
+              .then((r) => {
+                if (r)
+                  say('export', `exported ${r.items} items with ${r.blobs} attachments to ${r.dir}`)
+              })
+              .catch(fail('export'))
+          }
+        >
+          Export everything…
+        </Button>
+        <Button
+          onClick={() =>
+            void window.pim
+              .importPackage()
+              .then((r) => {
+                if (r)
+                  say(
+                    'export',
+                    `imported ${r.items} items, ${r.relations} links, ${r.entities} entities; ${r.existing} already here${
+                      r.conflicts.length ? `; skipped: ${r.conflicts.join('; ')}` : ''
+                    }`,
+                  )
+              })
+              .catch(fail('export'))
+          }
+        >
+          Import a package…
+        </Button>
+      </div>
+      <p style={{ color: colors.muted, fontSize: 12, margin: '0 0 8px' }}>
+        An export is a folder of Markdown and JSON with the attachments; it opens without PIM, and
+        importing it brings every item back with the same ids and links. The Library exports a
+        selection.
+        {note.export && <span style={{ color: colors.accent }}> {note.export}</span>}
       </p>
       <h3>Capture shortcut</h3>
       <div style={row}>
@@ -128,6 +261,23 @@ export function Settings() {
           knowledge stay.
         </span>
       </div>
+      <h3>Runtime</h3>
+      <WhatWorks status={runtime} />
+      <div style={row}>
+        <span style={{ width: 110, color: colors.muted }}>Python runtime</span>
+        <input
+          value={python}
+          onChange={(e) => setPython(e.target.value)}
+          placeholder="/path/to/pim/.tooling/py"
+          style={{ ...input, flex: 1 }}
+        />
+        <Button onClick={() => void save({ pythonRuntime: python.trim() || null })}>Save</Button>
+      </div>
+      <p style={{ color: colors.muted, fontSize: 12, margin: '0 0 8px' }}>
+        The environment that <code>infra/setup.sh</code> builds for audio transcription and OCR. The
+        packaged app starts the media worker from it at its next start; with the engine run from the
+        repository, compose already uses <code>.tooling/py</code>.
+      </p>
       <h3>Capture endpoint</h3>
       <p>
         <code>POST {s.endpoint}</code> with header <code>x-pim-secret</code> and a JSON body such as{' '}

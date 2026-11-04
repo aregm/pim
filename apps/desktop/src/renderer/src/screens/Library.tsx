@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { ItemView, SearchHit } from '../pim.d.ts'
-import { Chip, colors, kindLabel, when } from '../ui.tsx'
+import { Button, Chip, colors, kindLabel, when } from '../ui.tsx'
 
 const KINDS = ['all', 'url', 'text', 'file', 'image'] as const
 
@@ -29,6 +29,21 @@ export function Library({
   const [kind, setKind] = useState<(typeof KINDS)[number]>('all')
   const [hits, setHits] = useState<SearchHit[] | null>(null)
   const [hybrid, setHybrid] = useState(false)
+  const [picked, setPicked] = useState<Set<string>>(new Set())
+  const [exported, setExported] = useState<{ dir: string; items: number } | null>(null)
+  const toggle = (id: string) => {
+    const next = new Set(picked)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    setPicked(next)
+  }
+  const exportPicked = async () => {
+    const r = await window.pim.exportItems([...picked])
+    if (r) {
+      setExported({ dir: r.dir, items: r.items })
+      setPicked(new Set())
+    }
+  }
   useEffect(() => {
     const q = query.trim()
     if (!q) {
@@ -81,6 +96,23 @@ export function Library({
           </button>
         ))}
       </div>
+      {(picked.size > 0 || exported) && !hits && (
+        <div
+          style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, fontSize: 13 }}
+        >
+          {picked.size > 0 && (
+            <Button primary onClick={() => void exportPicked()}>
+              Export {picked.size} selected…
+            </Button>
+          )}
+          {exported && (
+            <span style={{ color: colors.muted }}>
+              exported {exported.items} item{exported.items === 1 ? '' : 's'} to{' '}
+              <code>{exported.dir}</code>
+            </span>
+          )}
+        </div>
+      )}
       {hits ? (
         hits.length === 0 ? (
           <p style={{ color: colors.muted }}>no matches</p>
@@ -128,6 +160,16 @@ export function Library({
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
           <thead>
             <tr style={{ textAlign: 'left', color: colors.muted, fontSize: 12 }}>
+              <th style={{ padding: '6px 0', width: 24 }}>
+                <input
+                  type="checkbox"
+                  title="select all"
+                  checked={picked.size > 0 && listed.every((i) => picked.has(i.id))}
+                  onChange={(e) =>
+                    setPicked(e.target.checked ? new Set(listed.map((i) => i.id)) : new Set())
+                  }
+                />
+              </th>
               <th style={{ padding: '6px 0' }}>Kind</th>
               <th>Title</th>
               <th>State</th>
@@ -141,6 +183,15 @@ export function Library({
                 onClick={() => onOpen(i.id)}
                 style={{ cursor: 'pointer', borderTop: `1px solid ${colors.border}` }}
               >
+                <td>
+                  <input
+                    type="checkbox"
+                    checked={picked.has(i.id)}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={() => toggle(i.id)}
+                    aria-label={`select ${i.title ?? i.source_id}`}
+                  />
+                </td>
                 <td style={{ padding: '8px 0', color: colors.muted }}>{kindLabel(i)}</td>
                 <td>{i.title ?? i.source_id}</td>
                 <td>
