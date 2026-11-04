@@ -50,7 +50,7 @@ npm run package        # stages the runtime and builds apps/desktop/dist/mac-arm
 npm run rehearsal      # the first-afternoon rehearsal against the built app (add --packaged for PIM.app)
 ```
 
-The packaged app brings its own engine and workers; Ollama (models) and the Python runtime for audio and OCR stay host installs. A packaged app started while `npm run engine` runs joins that engine instead.
+The packaged app brings its own engine and workers; Ollama (models) and the Python runtime for audio and OCR stay host installs. A packaged app started while `npm run engine` runs joins that engine instead. The two keep separate profiles (`~/Library/Application Support/PIM Dev` for `npm run dev`, `PIM` for the packaged app), so both can run at once; a gate run names its own with `--user-data-dir`.
 
 `npm test` runs the unit tests, `npm run lint` runs Biome, `npm run contracts` regenerates `contracts/*.json`.
 
