@@ -17,11 +17,11 @@ afterEach(() => {
 
 describe('schema', () => {
   it('migrates an empty vault to the current version and reopens a populated one', () => {
-    expect(vault.schemaVersion).toBe(3)
+    expect(vault.schemaVersion).toBe(4)
     vault.receipt({ source_kind: 'text', source_id: 'sha256:a', surface: 'test' })
     vault.close()
     const again = new Vault(dir)
-    expect(again.schemaVersion).toBe(3)
+    expect(again.schemaVersion).toBe(4)
     expect(again.items()).toHaveLength(1)
     again.close()
     vault = new Vault(dir)
@@ -244,5 +244,63 @@ describe('graph', () => {
     const small = vault.neighbourhood({ kind: 'item', id: a }, { budget: 2 })
     expect(small.nodes).toHaveLength(2)
     expect(small.hidden).toBe(2)
+  })
+})
+
+describe('embeddings and notes (M5)', () => {
+  it('stores vectors under a run, finds neighbours, invalidates only embeddings on a model change', () => {
+    expect(vault.vectors.available).toBe(true)
+    const a = vault.receipt({ source_kind: 'text', source_id: 'sha256:v1', surface: 'test' })
+    const b = vault.receipt({ source_kind: 'text', source_id: 'sha256:v2', surface: 'test' })
+    for (const id of [a.item_id, b.item_id]) vault.markPreserved(id, `sha256:c${id}`)
+    const payload = vault.addPayload(a.item_id, 'raw', 'sha256:blob', 'text/plain', 10)
+    const runA = vault.startRun(a.item_id, 'extract::text', '0.2.0')
+    vault.replaceFragments(a.item_id, payload.id, runA, 'extract::text', [
+      { ordinal: 0, selector: { kind: 'char', start: 0, end: 5 }, text: 'alpha' },
+      { ordinal: 1, selector: { kind: 'char', start: 6, end: 10 }, text: 'beta' },
+    ])
+    const frags = vault.fragments(a.item_id)
+    expect(frags[0]?.processor).toBe('extract::text')
+    const run = vault.startRun(a.item_id, 'enrich::embed', '0.5.0', { model_digest: 'sha256:m1' })
+    const vec = (x: number, y: number) => new Float32Array([x, y, 0, 0])
+    vault.putEmbeddings(a.item_id, run, 'm', 'sha256:m1', 4, [
+      { fragment_id: frags[0]?.id as string, vector: vec(1, 0) },
+      { fragment_id: frags[1]?.id as string, vector: vec(0.9, 0.1) },
+    ])
+    expect(vault.run(run)?.model_digest).toBe('sha256:m1')
+    expect(vault.embeddingCount(a.item_id)).toEqual({ count: 2, model_digest: 'sha256:m1' })
+    expect(vault.fragmentsToEmbed(a.item_id, 'sha256:m1')).toHaveLength(0)
+    expect(vault.fragmentsToEmbed(a.item_id, 'sha256:m2')).toHaveLength(2)
+    const near = vault.nearestFragments(vec(1, 0), 5)
+    expect(near[0]?.text).toBe('alpha')
+    expect(vault.artifactVector(a.item_id)?.dim).toBe(4)
+    expect(vault.nearestArtifacts(vec(1, 0), 5).map((n) => n.id)).toEqual([a.item_id])
+    // the model changes: only embeddings go, fragments stay (PRS-5)
+    expect(vault.invalidateEmbeddings(a.item_id, 'sha256:m2')).toBe(2)
+    expect(vault.fragments(a.item_id)).toHaveLength(2)
+    expect(vault.embeddingCount(a.item_id).count).toBe(0)
+    expect(vault.nearestFragments(vec(1, 0), 5)).toHaveLength(0)
+  })
+
+  it('keeps one note per artifact and author and reads its review status', () => {
+    const a = vault.receipt({ source_kind: 'text', source_id: 'sha256:n1', surface: 'test' })
+    const run = vault.startRun(a.item_id, 'enrich::extract', '0.5.0')
+    const note = vault.upsertNote(a.item_id, 'enrich::extract', 'A summary.', 'Cleaned title', run)
+    const rel = vault.graph.addRelation({
+      subject: { kind: 'item', id: note },
+      predicate: 'derived_from',
+      object: { kind: 'item', id: a.item_id },
+      author: 'enrich::extract',
+      run_id: run,
+    })
+    expect(vault.notes(a.item_id)).toMatchObject([
+      { text: 'A summary.', status: 'suggested', relation_id: rel.id },
+    ])
+    expect(vault.upsertNote(a.item_id, 'enrich::extract', 'Another.', null, run)).toBe(note)
+    expect(vault.notes(a.item_id)[0]?.text).toBe('Another.')
+    expect(vault.items().map((i) => i.id)).not.toContain(note)
+    const e = vault.graph.upsertEntity('person', 'Priya Raman', ['P. Raman'])
+    expect(vault.graph.upsertEntity('person', 'p. raman').id).toBe(e.id)
+    expect(vault.graph.aliases(e.id)).toEqual(['P. Raman'])
   })
 })

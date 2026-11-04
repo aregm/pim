@@ -28,15 +28,16 @@ export function Library({
   const [query, setQuery] = useState('')
   const [kind, setKind] = useState<(typeof KINDS)[number]>('all')
   const [hits, setHits] = useState<SearchHit[] | null>(null)
+  const [hybrid, setHybrid] = useState(false)
   useEffect(() => {
     const q = query.trim()
     if (!q) {
       setHits(null)
       return
     }
-    const id = setTimeout(() => void window.pim.search(q).then(setHits), 120)
+    const id = setTimeout(() => void window.pim.search(q, hybrid).then(setHits), 120)
     return () => clearTimeout(id)
-  }, [query])
+  }, [query, hybrid])
   const byKind = <T extends { source_kind: string }>(rows: T[]) =>
     kind === 'all' ? rows : rows.filter((r) => r.source_kind === kind)
   const listed = byKind(items.filter((i) => i.state !== 'duplicate'))
@@ -56,6 +57,12 @@ export function Library({
             fontFamily: 'inherit',
           }}
         />
+        <label
+          title="also rank by meaning, through the embedding model; lexical results stay when no model runs"
+          style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: 12 }}
+        >
+          <input type="checkbox" checked={hybrid} onChange={() => setHybrid(!hybrid)} /> hybrid
+        </label>
         {KINDS.map((k) => (
           <button
             key={k}
@@ -102,6 +109,11 @@ export function Library({
                   </span>
                   {h.title ?? h.item_id}
                   <Chip state={h.state} />
+                  {h.why && h.why !== 'lexical' && (
+                    <span style={{ fontSize: 11, color: colors.accent, marginLeft: 8 }}>
+                      {h.why === 'both' ? 'words and meaning' : 'by meaning'}
+                    </span>
+                  )}
                   <div style={{ fontSize: 13, color: colors.muted, marginTop: 2 }}>
                     {renderSnippet(h.snippet)}
                   </div>

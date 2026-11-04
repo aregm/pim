@@ -99,17 +99,102 @@ const now = () => new Date().toISOString()
 export class Graph {
   constructor(private readonly db: DatabaseSync) {}
 
-  upsertEntity(kind: string, name: string): EntityRow {
+  /** Finds an entity by kind and normalised name or alias, or creates it; aliases are added, never removed. */
+  upsertEntity(kind: string, name: string, aliases: string[] = []): EntityRow {
     const normalized = normalizeName(name)
-    const existing = this.db
-      .prepare('SELECT id, kind, name, normalized FROM entity WHERE kind = ? AND normalized = ?')
-      .get(kind, normalized) as EntityRow | undefined
-    if (existing) return existing
-    const row: EntityRow = { id: uuidv7(), kind, name: name.trim(), normalized }
-    this.db
-      .prepare('INSERT INTO entity (id, kind, name, normalized, created_at) VALUES (?, ?, ?, ?, ?)')
-      .run(row.id, row.kind, row.name, row.normalized, now())
+    const existing =
+      (this.db
+        .prepare('SELECT id, kind, name, normalized FROM entity WHERE kind = ? AND normalized = ?')
+        .get(kind, normalized) as EntityRow | undefined) ??
+      (this.db
+        .prepare(
+          'SELECT e.id, e.kind, e.name, e.normalized FROM entity e JOIN entity_alias a ON a.entity_id = e.id WHERE e.kind = ? AND a.normalized = ?',
+        )
+        .get(kind, normalized) as EntityRow | undefined)
+    const row: EntityRow = existing ?? { id: uuidv7(), kind, name: name.trim(), normalized }
+    if (!existing)
+      this.db
+        .prepare(
+          'INSERT INTO entity (id, kind, name, normalized, created_at) VALUES (?, ?, ?, ?, ?)',
+        )
+        .run(row.id, row.kind, row.name, row.normalized, now())
+    const alias = this.db.prepare(
+      'INSERT OR IGNORE INTO entity_alias (entity_id, normalized, name) VALUES (?, ?, ?)',
+    )
+    for (const a of aliases) {
+      const n = normalizeName(a)
+      if (n && n !== row.normalized) alias.run(row.id, n, a.trim())
+    }
     return row
+  }
+
+  /** An entity by kind and normalised name or alias, without creating one. */
+  findEntity(kind: string, name: string): EntityRow | undefined {
+    const normalized = normalizeName(name)
+    return (
+      (this.db
+        .prepare('SELECT id, kind, name, normalized FROM entity WHERE kind = ? AND normalized = ?')
+        .get(kind, normalized) as EntityRow | undefined) ??
+      (this.db
+        .prepare(
+          'SELECT e.id, e.kind, e.name, e.normalized FROM entity e JOIN entity_alias a ON a.entity_id = e.id WHERE e.kind = ? AND a.normalized = ?',
+        )
+        .get(kind, normalized) as EntityRow | undefined)
+    )
+  }
+
+  aliases(entityId: string): string[] {
+    return (
+      this.db.prepare('SELECT name FROM entity_alias WHERE entity_id = ?').all(entityId) as {
+        name: string
+      }[]
+    ).map((r) => r.name)
+  }
+
+  /** Other artifacts that mention or are tagged with the same entities as this one, with the evidence of both ends. */
+  sharedEntities(
+    artifactId: string,
+  ): { artifact_id: string; entities: string[]; evidence: string[]; score: number }[] {
+    const rows = this.db
+      .prepare(
+        `SELECT r2.subject_id AS artifact_id, e.name, e.kind, r1.status AS s1, r2.status AS s2,
+                (SELECT GROUP_CONCAT(fragment_id) FROM relation_evidence WHERE relation_id = r1.id) AS ev1,
+                (SELECT GROUP_CONCAT(fragment_id) FROM relation_evidence WHERE relation_id = r2.id) AS ev2
+         FROM relation r1
+         JOIN relation r2 ON r2.object_kind = 'entity' AND r2.object_id = r1.object_id AND r2.subject_kind = 'item' AND r2.subject_id != r1.subject_id
+         JOIN entity e ON e.id = r1.object_id
+         WHERE r1.subject_kind = 'item' AND r1.subject_id = ? AND r1.object_kind = 'entity'
+           AND r1.predicate IN ('mentions', 'tagged', 'about') AND r2.predicate IN ('mentions', 'tagged', 'about')
+           AND r1.status IN ('accepted', 'suggested') AND r2.status IN ('accepted', 'suggested')`,
+      )
+      .all(artifactId) as {
+      artifact_id: string
+      name: string
+      kind: string
+      s1: string
+      s2: string
+      ev1: string | null
+      ev2: string | null
+    }[]
+    const by = new Map<string, { entities: Set<string>; evidence: Set<string>; score: number }>()
+    for (const r of rows) {
+      const cur = by.get(r.artifact_id) ?? {
+        entities: new Set<string>(),
+        evidence: new Set<string>(),
+        score: 0,
+      }
+      // an accepted entity on both ends counts 1, a proposed one 0.5, a proposed tag 0
+      cur.score += r.s1 === 'accepted' && r.s2 === 'accepted' ? 1 : r.kind === 'tag' ? 0 : 0.5
+      cur.entities.add(r.name)
+      for (const id of `${r.ev1 ?? ''},${r.ev2 ?? ''}`.split(',')) if (id) cur.evidence.add(id)
+      by.set(r.artifact_id, cur)
+    }
+    return [...by.entries()].map(([artifact_id, v]) => ({
+      artifact_id,
+      entities: [...v.entities],
+      evidence: [...v.evidence],
+      score: v.score,
+    }))
   }
 
   entity(id: string): EntityRow | undefined {

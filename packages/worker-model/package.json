@@ -1,0 +1,14 @@
+{
+  "name": "@pim/worker-model",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.ts"
+  },
+  "dependencies": {
+    "@pim/contracts": "0.1.0",
+    "@pim/worker-kit": "0.1.0",
+    "zod": "^4.0.0"
+  }
+}

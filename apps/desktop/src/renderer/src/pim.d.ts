@@ -38,11 +38,14 @@ export type Selector =
 export interface FragmentView {
   id: string
   payload_id: string
+  /** `enrich::*` means model output (MET-2). */
+  processor: string
   ordinal: number
   selector: Selector
   text: string
 }
 export interface SearchHit {
+  why?: 'lexical' | 'semantic' | 'both'
   item_id: string
   title: string | null
   source_kind: 'url' | 'text' | 'file' | 'image'
@@ -67,6 +70,7 @@ export interface RelationView {
   score: number | null
   score_json: Record<string, unknown> | null
   created_at: string
+  run: RunView | null
   evidence: {
     fragment_id: string
     artifact_id: string
@@ -75,6 +79,38 @@ export interface RelationView {
     text: string
     role: string
   }[]
+}
+export interface RunView {
+  id: string
+  processor: string
+  version: string
+  model_digest: string | null
+  prompt_digest: string | null
+  started_at: string
+}
+export interface NoteView {
+  item_id: string
+  artifact_id: string
+  author: string
+  text: string
+  title: string | null
+  run_id: string
+  created_at: string
+  updated_at: string
+  relation_id: string | null
+  status: 'suggested' | 'accepted' | 'rejected' | 'superseded' | null
+  run: RunView | null
+}
+export interface ModelSettings {
+  embed: string
+  text: string
+  vision: string
+}
+export interface ModelsStatus {
+  ok: boolean
+  url: string
+  models: { name: string; digest: string }[]
+  error?: string
 }
 export interface TagView {
   relation_id: string
@@ -128,6 +164,7 @@ export interface SettingsView {
   watchedFolders: WatchedFolder[]
   captureSecret: string
   endpoint: string
+  models: ModelSettings
 }
 
 declare global {
@@ -139,7 +176,10 @@ declare global {
       items: () => Promise<ItemView[]>
       payloads: (id: string) => Promise<PayloadView[]>
       fragments: (id: string) => Promise<FragmentView[]>
-      search: (query: string) => Promise<SearchHit[]>
+      search: (query: string, hybrid?: boolean) => Promise<SearchHit[]>
+      notes: (id: string) => Promise<NoteView[]>
+      enrich: (id: string) => Promise<void>
+      modelsStatus: (force?: boolean) => Promise<ModelsStatus>
       relations: (id: string) => Promise<RelationView[]>
       suggestions: () => Promise<RelationView[]>
       tags: (id: string) => Promise<TagView[]>

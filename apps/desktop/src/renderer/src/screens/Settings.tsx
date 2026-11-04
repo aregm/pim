@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { SettingsView, WatchedFolder } from '../pim.d.ts'
+import type { ModelsStatus, SettingsView, WatchedFolder } from '../pim.d.ts'
 import { Button, colors } from '../ui.tsx'
 
 export function Settings() {
@@ -7,11 +7,18 @@ export function Settings() {
   const [folder, setFolder] = useState('')
   const [policy, setPolicy] = useState<WatchedFolder['policy']>('copy')
   const [shortcut, setShortcut] = useState('')
+  const [models, setModels] = useState<ModelsStatus | null>(null)
+  const [names, setNames] = useState({ embed: '', text: '', vision: '' })
   useEffect(() => {
     void window.pim.settings().then((v) => {
       setS(v)
       setShortcut(v.shortcut)
+      setNames(v.models)
     })
+    const poll = () => void window.pim.modelsStatus(true).then(setModels)
+    poll()
+    const id = setInterval(poll, 10_000)
+    return () => clearInterval(id)
   }, [])
   if (!s) return null
   const save = async (patch: Partial<SettingsView>) =>
@@ -78,6 +85,48 @@ export function Settings() {
         >
           Add
         </Button>
+      </div>
+      <h3>Models</h3>
+      <p style={{ color: models?.ok ? colors.ok : colors.warn }}>
+        {models === null
+          ? 'checking…'
+          : models.ok
+            ? `Ollama answers at ${models.url} with ${models.models.length} model${models.models.length === 1 ? '' : 's'}`
+            : `Ollama not reachable (${models.error ?? 'no answer'}): search stays lexical, nothing is enriched until it runs`}
+      </p>
+      {models?.ok && (
+        <ul style={{ color: colors.muted, fontSize: 12 }}>
+          {models.models.map((m) => (
+            <li key={m.name}>
+              <code>{m.name}</code> · {m.digest.slice(7, 19)}
+            </li>
+          ))}
+        </ul>
+      )}
+      {(['embed', 'text', 'vision'] as const).map((k) => (
+        <div key={k} style={row}>
+          <span style={{ width: 110, color: colors.muted }}>
+            {k === 'embed' ? 'embeddings' : k === 'text' ? 'extraction' : 'captions'}
+          </span>
+          <input
+            value={names[k]}
+            onChange={(e) => setNames({ ...names, [k]: e.target.value })}
+            style={{ ...input, flex: 1 }}
+          />
+          {models?.ok &&
+            !models.models.some((m) => m.name === names[k] || m.name === `${names[k]}:latest`) && (
+              <span style={{ color: colors.warn, fontSize: 12 }}>
+                not installed: ollama pull {names[k]}
+              </span>
+            )}
+        </div>
+      ))}
+      <div style={row}>
+        <Button onClick={() => void save({ models: names })}>Save models</Button>
+        <span style={{ color: colors.muted, fontSize: 12 }}>
+          A changed embedding model re-embeds items on their next enrichment; fragments and accepted
+          knowledge stay.
+        </span>
       </div>
       <h3>Capture endpoint</h3>
       <p>

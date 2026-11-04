@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "type": "boolean"
+    },
+    "url": {
+      "type": "string"
+    },
+    "models": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "digest"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "error": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "ok",
+    "url",
+    "models"
+  ],
+  "additionalProperties": false
+}

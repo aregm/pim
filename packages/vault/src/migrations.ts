@@ -142,4 +142,53 @@ CREATE TABLE relation_evidence (
 CREATE VIRTUAL TABLE fragment_vocab USING fts5vocab('fragment_fts', 'row');
 `,
   },
+  {
+    version: 4,
+    sql: `
+ALTER TABLE processing_run ADD COLUMN model_digest TEXT;
+ALTER TABLE processing_run ADD COLUMN prompt_digest TEXT;
+ALTER TABLE processing_run ADD COLUMN params_json TEXT;
+CREATE TABLE embedding (
+  fragment_id TEXT PRIMARY KEY REFERENCES fragment(id),
+  artifact_id TEXT NOT NULL REFERENCES artifact(item_id),
+  model TEXT NOT NULL,
+  model_digest TEXT NOT NULL,
+  dim INTEGER NOT NULL,
+  run_id TEXT NOT NULL REFERENCES processing_run(id),
+  created_at TEXT NOT NULL
+);
+CREATE INDEX embedding_artifact ON embedding(artifact_id, model_digest);
+CREATE TABLE artifact_embedding (
+  artifact_id TEXT PRIMARY KEY REFERENCES artifact(item_id),
+  model_digest TEXT NOT NULL,
+  dim INTEGER NOT NULL,
+  fragments INTEGER NOT NULL,
+  run_id TEXT NOT NULL REFERENCES processing_run(id),
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE note (
+  item_id TEXT PRIMARY KEY REFERENCES item(id),
+  artifact_id TEXT NOT NULL REFERENCES artifact(item_id),
+  author TEXT NOT NULL,
+  text TEXT NOT NULL,
+  title TEXT,
+  run_id TEXT NOT NULL REFERENCES processing_run(id),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(artifact_id, author)
+);
+CREATE TABLE entity_alias (
+  entity_id TEXT NOT NULL REFERENCES entity(id),
+  normalized TEXT NOT NULL,
+  name TEXT NOT NULL,
+  PRIMARY KEY(entity_id, normalized)
+);
+CREATE INDEX entity_alias_normalized ON entity_alias(normalized);
+CREATE TABLE entity_embedding (
+  entity_id TEXT PRIMARY KEY REFERENCES entity(id),
+  model_digest TEXT NOT NULL,
+  dim INTEGER NOT NULL
+);
+`,
+  },
 ]

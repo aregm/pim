@@ -2,9 +2,10 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { BlobStore } from './blobs.ts'
-import { Graph } from './graph.ts'
+import { Graph, type RelationStatus } from './graph.ts'
 import { uuidv7 } from './id.ts'
 import { MIGRATIONS } from './migrations.ts'
+import { centroid, Vectors } from './vectors.ts'
 
 export { BlobStore } from './blobs.ts'
 export * from './graph.ts'
@@ -84,8 +85,44 @@ export interface FragmentRow {
   artifact_id: string
   payload_id: string
   run_id: string
+  /** The processor of the run that produced it; `enrich::*` marks model output (MET-2). */
+  processor: string
   ordinal: number
   selector: Selector
+  text: string
+}
+
+export interface RunRow {
+  id: string
+  artifact_id: string
+  processor: string
+  version: string
+  status: string
+  started_at: string
+  finished_at: string | null
+  error: string | null
+  model_digest: string | null
+  prompt_digest: string | null
+  params_json: string | null
+}
+
+export interface NoteRow {
+  item_id: string
+  artifact_id: string
+  author: string
+  text: string
+  title: string | null
+  run_id: string
+  created_at: string
+  updated_at: string
+  relation_id: string | null
+  status: RelationStatus | null
+}
+
+export interface SemanticHit {
+  item_id: string
+  fragment_id: string
+  distance: number
   text: string
 }
 
@@ -98,6 +135,8 @@ export interface SearchHit {
   snippet: string
   fragment_id: string | null
   last_captured_at: string
+  /** Hybrid search: which half found it (specification PRS-8, UI-5). */
+  why?: 'lexical' | 'semantic' | 'both'
 }
 
 export interface JobRow {
@@ -120,13 +159,15 @@ export class Vault {
   readonly db: DatabaseSync
   readonly blobs: BlobStore
   readonly graph: Graph
+  readonly vectors: Vectors
 
   constructor(dir: string) {
     this.dir = dir
     mkdirSync(dir, { recursive: true })
-    this.db = new DatabaseSync(join(dir, 'vault.sqlite'))
+    this.db = new DatabaseSync(join(dir, 'vault.sqlite'), { allowExtension: true })
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;')
     this.migrate()
+    this.vectors = new Vectors(this.db)
     this.blobs = new BlobStore(join(dir, 'blobs'))
     this.graph = new Graph(this.db)
   }
@@ -325,10 +366,13 @@ export class Vault {
       .run(plus(leaseMs), now(), id)
   }
 
-  completeJob(id: string) {
+  /** Marks a job done; `note` is kept in `last_error` for jobs that finished by skipping (e.g. no model). */
+  completeJob(id: string, note?: string) {
     this.db
-      .prepare('UPDATE job SET state = ?, lease_until = NULL, updated_at = ? WHERE id = ?')
-      .run('done', now(), id)
+      .prepare(
+        'UPDATE job SET state = ?, lease_until = NULL, last_error = ?, updated_at = ? WHERE id = ?',
+      )
+      .run('done', note ?? null, now(), id)
   }
 
   /** Three attempts with exponential backoff (5 s, 10 s, 20 s), then `failed`. */
@@ -363,14 +407,63 @@ export class Vault {
 
   // ---- processing runs and fragments (MET-1, PRS-1) ----
 
-  startRun(artifactId: string, processor: string, version: string): string {
+  startRun(
+    artifactId: string,
+    processor: string,
+    version: string,
+    meta: { model_digest?: string; prompt_digest?: string; params?: Record<string, unknown> } = {},
+  ): string {
     const id = uuidv7()
     this.db
       .prepare(
-        'INSERT INTO processing_run (id, artifact_id, processor, version, status, started_at) VALUES (?, ?, ?, ?, ?, ?)',
+        'INSERT INTO processing_run (id, artifact_id, processor, version, status, started_at, model_digest, prompt_digest, params_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
-      .run(id, artifactId, processor, version, 'running', now())
+      .run(
+        id,
+        artifactId,
+        processor,
+        version,
+        'running',
+        now(),
+        meta.model_digest ?? null,
+        meta.prompt_digest ?? null,
+        meta.params ? JSON.stringify(meta.params) : null,
+      )
     return id
+  }
+
+  /** Records the model and prompt a run used once they are known (MET-1). */
+  describeRun(id: string, meta: { model_digest?: string; prompt_digest?: string }) {
+    this.db
+      .prepare(
+        'UPDATE processing_run SET model_digest = COALESCE(?, model_digest), prompt_digest = COALESCE(?, prompt_digest) WHERE id = ?',
+      )
+      .run(meta.model_digest ?? null, meta.prompt_digest ?? null, id)
+  }
+
+  /** The latest finished run of a processor on an artifact, to skip work already done with the same model. */
+  lastRun(artifactId: string, processor: string): RunRow | undefined {
+    return this.db
+      .prepare(
+        "SELECT * FROM processing_run WHERE artifact_id = ? AND processor = ? AND status = 'done' ORDER BY started_at DESC LIMIT 1",
+      )
+      .get(artifactId, processor) as RunRow | undefined
+  }
+
+  /** Runs left `running` by an instance that died mid-stage are failed, so the job's retry starts a new one (PRS-7). */
+  closeStaleRuns(): number {
+    const r = this.db
+      .prepare(
+        "UPDATE processing_run SET status = 'failed', finished_at = ?, error = 'interrupted' WHERE status = 'running'",
+      )
+      .run(now())
+    return Number(r.changes)
+  }
+
+  run(id: string): RunRow | undefined {
+    return this.db.prepare('SELECT * FROM processing_run WHERE id = ?').get(id) as
+      | RunRow
+      | undefined
   }
 
   finishRun(id: string, error?: string) {
@@ -390,6 +483,14 @@ export class Vault {
     const t = now()
     this.db.exec('BEGIN')
     try {
+      const gone = (
+        this.db
+          .prepare(
+            'SELECT id FROM fragment WHERE payload_id = ? AND run_id IN (SELECT id FROM processing_run WHERE processor = ?)',
+          )
+          .all(payloadId, processor) as { id: string }[]
+      ).map((r) => r.id)
+      this.forgetEmbeddings(gone)
       this.db
         .prepare(
           'DELETE FROM fragment WHERE payload_id = ? AND run_id IN (SELECT id FROM processing_run WHERE processor = ?)',
@@ -419,7 +520,7 @@ export class Vault {
   fragments(artifactId: string): FragmentRow[] {
     const rows = this.db
       .prepare(
-        'SELECT id, artifact_id, payload_id, run_id, ordinal, selector_json, text FROM fragment WHERE artifact_id = ? ORDER BY ordinal',
+        'SELECT f.id, f.artifact_id, f.payload_id, f.run_id, r.processor, f.ordinal, f.selector_json, f.text FROM fragment f JOIN processing_run r ON r.id = f.run_id WHERE f.artifact_id = ? ORDER BY f.ordinal',
       )
       .all(artifactId) as unknown as (Omit<FragmentRow, 'selector'> & { selector_json: string })[]
     return rows.map(({ selector_json, ...r }) => ({
@@ -551,6 +652,207 @@ export class Vault {
   }
 
   /** Adds a stage job for an artifact unless one exists (any state). */
+  // ---- embeddings (PRS-5, specification 6.4 step 6): derived, rebuilt when the model changes ----
+
+  /** Fragments of an artifact that have no vector from this model yet. */
+  fragmentsToEmbed(artifactId: string, modelDigest: string): FragmentRow[] {
+    return this.fragments(artifactId).filter(
+      (f) =>
+        !this.db
+          .prepare('SELECT 1 FROM embedding WHERE fragment_id = ? AND model_digest = ?')
+          .get(f.id, modelDigest),
+    )
+  }
+
+  private forgetEmbeddings(fragmentIds: string[]) {
+    if (fragmentIds.length === 0) return
+    this.vectors.forget('fragment', fragmentIds)
+    const del = this.db.prepare('DELETE FROM embedding WHERE fragment_id = ?')
+    for (const id of fragmentIds) del.run(id)
+  }
+
+  /** Drops an artifact's vectors from any other model, so changing the model invalidates only embeddings. */
+  invalidateEmbeddings(artifactId: string, keepDigest: string): number {
+    const stale = (
+      this.db
+        .prepare('SELECT fragment_id FROM embedding WHERE artifact_id = ? AND model_digest != ?')
+        .all(artifactId, keepDigest) as { fragment_id: string }[]
+    ).map((r) => r.fragment_id)
+    this.forgetEmbeddings(stale)
+    return stale.length
+  }
+
+  /** Stores vectors for fragments under a run, then refreshes the artifact centroid. */
+  putEmbeddings(
+    artifactId: string,
+    runId: string,
+    model: string,
+    modelDigest: string,
+    dim: number,
+    rows: { fragment_id: string; vector: Float32Array }[],
+  ) {
+    const t = now()
+    this.db.exec('BEGIN')
+    try {
+      this.forgetEmbeddings(rows.map((r) => r.fragment_id))
+      const ins = this.db.prepare(
+        'INSERT INTO embedding (fragment_id, artifact_id, model, model_digest, dim, run_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      )
+      for (const r of rows) ins.run(r.fragment_id, artifactId, model, modelDigest, dim, runId, t)
+      this.vectors.put(
+        'fragment',
+        dim,
+        rows.map((r) => ({ id: r.fragment_id, vector: r.vector })),
+      )
+      const ids = (
+        this.db
+          .prepare('SELECT fragment_id FROM embedding WHERE artifact_id = ? AND model_digest = ?')
+          .all(artifactId, modelDigest) as { fragment_id: string }[]
+      ).map((r) => r.fragment_id)
+      const all = [...this.vectors.get('fragment', dim, ids).values()]
+      if (all.length) {
+        const c = centroid(all, dim)
+        this.vectors.put('artifact', dim, [{ id: artifactId, vector: c }])
+        this.db
+          .prepare(
+            'INSERT INTO artifact_embedding (artifact_id, model_digest, dim, fragments, run_id, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(artifact_id) DO UPDATE SET model_digest = excluded.model_digest, dim = excluded.dim, fragments = excluded.fragments, run_id = excluded.run_id, updated_at = excluded.updated_at',
+          )
+          .run(artifactId, modelDigest, dim, all.length, runId, t)
+      }
+      this.db.exec('COMMIT')
+    } catch (e) {
+      this.db.exec('ROLLBACK')
+      throw e
+    }
+  }
+
+  embeddingCount(artifactId: string): { count: number; model_digest: string | null } {
+    const r = this.db
+      .prepare(
+        'SELECT COUNT(*) AS count, MAX(model_digest) AS model_digest FROM embedding WHERE artifact_id = ?',
+      )
+      .get(artifactId) as { count: number; model_digest: string | null }
+    return r
+  }
+
+  artifactVector(artifactId: string): { vector: Float32Array; dim: number } | undefined {
+    const r = this.db
+      .prepare('SELECT dim FROM artifact_embedding WHERE artifact_id = ?')
+      .get(artifactId) as { dim: number } | undefined
+    if (!r) return undefined
+    const v = this.vectors.get('artifact', r.dim, [artifactId]).get(artifactId)
+    return v ? { vector: v, dim: r.dim } : undefined
+  }
+
+  /** Nearest artifacts by centroid, with their ids resolved to live, non-duplicate artifacts. */
+  nearestArtifacts(vector: Float32Array, k: number, exclude: string[] = []) {
+    return this.vectors.nearest('artifact', vector, k, new Set(exclude)).filter((n) => {
+      const a = this.item(n.id)
+      return a && a.state !== 'duplicate'
+    })
+  }
+
+  /** Nearest fragments to a vector, each with its artifact and text; the semantic half of hybrid search. */
+  nearestFragments(vector: Float32Array, k: number, exclude: string[] = []): SemanticHit[] {
+    const hits = this.vectors.nearest('fragment', vector, k, new Set(exclude))
+    const sel = this.db.prepare('SELECT artifact_id, text FROM fragment WHERE id = ?')
+    return hits.flatMap((h) => {
+      const f = sel.get(h.id) as { artifact_id: string; text: string } | undefined
+      return f
+        ? [{ item_id: f.artifact_id, fragment_id: h.id, distance: h.distance, text: f.text }]
+        : []
+    })
+  }
+
+  /** Name vectors of entities, for resolution by closeness (specification 6.4 step 5). */
+  putEntityVectors(
+    modelDigest: string,
+    dim: number,
+    rows: { entity_id: string; vector: Float32Array }[],
+  ) {
+    if (rows.length === 0) return
+    this.vectors.put(
+      'entity',
+      dim,
+      rows.map((r) => ({ id: r.entity_id, vector: r.vector })),
+    )
+    const up = this.db.prepare(
+      'INSERT INTO entity_embedding (entity_id, model_digest, dim) VALUES (?, ?, ?) ON CONFLICT(entity_id) DO UPDATE SET model_digest = excluded.model_digest, dim = excluded.dim',
+    )
+    for (const r of rows) up.run(r.entity_id, modelDigest, dim)
+  }
+
+  entitiesWithoutVector(entityIds: string[], modelDigest: string): string[] {
+    const has = this.db.prepare(
+      'SELECT 1 FROM entity_embedding WHERE entity_id = ? AND model_digest = ?',
+    )
+    return entityIds.filter((id) => !has.get(id, modelDigest))
+  }
+
+  nearestEntities(vector: Float32Array, k: number, exclude: string[] = []) {
+    return this.vectors.nearest('entity', vector, k, new Set(exclude))
+  }
+
+  fragmentVectors(fragmentIds: string[], dim: number) {
+    return this.vectors.get('fragment', dim, fragmentIds)
+  }
+
+  // ---- notes: a summary is an item of kind `note`, linked by derived_from (specification 6.4 step 5) ----
+
+  /** One note per artifact and author: a re-run replaces the text while the review status stays. */
+  upsertNote(
+    artifactId: string,
+    author: string,
+    text: string,
+    title: string | null,
+    runId: string,
+  ): string {
+    const t = now()
+    const existing = this.db
+      .prepare('SELECT item_id FROM note WHERE artifact_id = ? AND author = ?')
+      .get(artifactId, author) as { item_id: string } | undefined
+    if (existing) {
+      this.db
+        .prepare(
+          'UPDATE note SET text = ?, title = ?, run_id = ?, updated_at = ? WHERE item_id = ?',
+        )
+        .run(text, title, runId, t, existing.item_id)
+      this.db
+        .prepare('UPDATE item SET title = ?, updated_at = ? WHERE id = ?')
+        .run(title ?? 'Summary', t, existing.item_id)
+      return existing.item_id
+    }
+    const id = uuidv7()
+    this.db
+      .prepare('INSERT INTO item (id, kind, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+      .run(id, 'note', title ?? 'Summary', t, t)
+    this.db
+      .prepare(
+        'INSERT INTO note (item_id, artifact_id, author, text, title, run_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run(id, artifactId, author, text, title, runId, t, t)
+    return id
+  }
+
+  notes(artifactId: string): NoteRow[] {
+    return this.db
+      .prepare(
+        "SELECT n.*, r.id AS relation_id, r.status FROM note n LEFT JOIN relation r ON r.subject_kind = 'item' AND r.subject_id = n.item_id AND r.predicate = 'derived_from' AND r.object_kind = 'item' AND r.object_id = n.artifact_id WHERE n.artifact_id = ? ORDER BY n.updated_at DESC",
+      )
+      .all(artifactId) as unknown as NoteRow[]
+  }
+
+  /** Reopens done jobs of a stage whose last error starts with a prefix, e.g. once a model becomes available. */
+  requeueWhere(stage: string, errorPrefix: string): number {
+    const t = now()
+    const r = this.db
+      .prepare(
+        "UPDATE job SET state = 'open', attempts = 0, next_run_at = ?, lease_until = NULL, updated_at = ? WHERE stage = ? AND state IN ('done', 'failed') AND last_error LIKE ?",
+      )
+      .run(t, t, stage, `${errorPrefix}%`)
+    return Number(r.changes)
+  }
+
   enqueue(artifactId: string, stage: string): boolean {
     const t = now()
     const r = this.db

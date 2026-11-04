@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "model": {
+      "type": "string"
+    },
+    "model_digest": {
+      "type": "string"
+    },
+    "prompt_digest": {
+      "type": "string"
+    },
+    "caption": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "model",
+    "model_digest",
+    "prompt_digest",
+    "caption"
+  ],
+  "additionalProperties": false
+}

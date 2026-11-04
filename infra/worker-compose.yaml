@@ -29,6 +29,13 @@ containers:
       ELECTRON_RUN_AS_NODE: ""
     scripts:
       run: ../../node_modules/.bin/electron src/index.mjs
+  model:
+    worker: path://../packages/worker-model
+    restart: on-failure
+    environment:
+      OLLAMA_URL: http://127.0.0.1:11434
+    scripts:
+      run: node src/index.ts
   http:
     worker: package://api.workers.iii.dev/http
     version: "0.22.8"
