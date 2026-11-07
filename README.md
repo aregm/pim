@@ -119,6 +119,8 @@ npm run gate0          # with the engine running: catalog, loopback, telemetry c
 npm run rehearsal      # the first-afternoon rehearsal (add --packaged for PIM.app)
 ```
 
+**Traces and logs.** The development engine keeps every stage call, log line and metric in memory (`.iii/config/iii-observability.yaml`, memory exporters, nothing sent anywhere), and `npm run engine` also starts iii's console, the ADE, at [http://127.0.0.1:3114](http://127.0.0.1:3114): its Traces page shows each capture as a tree of spans across the core and the workers, and its Workers page shows each worker's log, settings and registered functions. The console binds all interfaces on that port, so keep the macOS firewall on while it runs; the packaged app does not include it.
+
 The rehearsal (`tests/e2e/rehearsal.mjs`) drives a fresh install through first run, five captures, search, opening each at its passage, two accepted links, the graph, an export round trip and a backup with restore test. Its corpus is described in `tests/corpus/README.md`.
 
 Layout: `apps/desktop` (Electron: the main process is the trusted core and the only writer to the vault, the renderer is sandboxed), `packages/vault` (SQLite through `node:sqlite`, FTS5, sqlite-vec, export and backup), `packages/contracts` (the Zod schemas every message obeys), `packages/worker-*` (TypeScript workers: parse, web preserve, model), `workers-py/media` (Python: transcription, OCR, keyframes), `infra` (compose file, setup, engine lock).
