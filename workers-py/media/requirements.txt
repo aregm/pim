@@ -5,4 +5,4 @@ numpy==2.5.4
 pyobjc-framework-Vision==13.0
 pyobjc-framework-Quartz==13.0
 pypdfium2==5.0.0
-pillow==12.1.1
+pillow==13.0.0
