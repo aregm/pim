@@ -163,6 +163,11 @@ app.whenReady().then(() => {
   iii.registerFunction('kernel::receipt', (input: unknown) =>
     core.receive(CaptureRequest.parse(input), 'api'),
   )
+  iii.registerFunction('kernel::retry', async (input: unknown) => {
+    const { item_id } = input as { item_id: string }
+    core.retry(String(item_id))
+    return { ok: true }
+  })
   iii.registerFunction('kernel::search', async (input: unknown) => {
     const { query, limit } = SearchRequest.parse(input)
     return { hits: core.search(query, limit) }

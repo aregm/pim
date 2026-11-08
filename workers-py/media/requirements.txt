@@ -1,1 +1,8 @@
 iii-sdk==0.25.0
+pywhispercpp==1.5.1
+av==19.0.2
+numpy==2.5.4
+pyobjc-framework-Vision==13.0
+pyobjc-framework-Quartz==13.0
+pypdfium2==5.0.0
+pillow==12.1.1

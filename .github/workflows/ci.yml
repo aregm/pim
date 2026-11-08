@@ -12,6 +12,7 @@ jobs:
       - run: npm run contracts && git diff --exit-code contracts
       - run: npm test
       - run: npm run setup
+      - run: npm run test:py
       - name: gate 0
         run: |
           (npm run engine > engine.out 2>&1 &) ; sleep 15
