@@ -125,7 +125,7 @@ The rehearsal (`tests/e2e/rehearsal.mjs`) drives a fresh install through first r
 
 Layout: `apps/desktop` (Electron: the main process is the trusted core and the only writer to the vault, the renderer is sandboxed), `packages/vault` (SQLite through `node:sqlite`, FTS5, sqlite-vec, export and backup), `packages/contracts` (the Zod schemas every message obeys), `packages/worker-*` (TypeScript workers: parse, web preserve, model), `workers-py/media` (Python: transcription, OCR, keyframes), `infra` (compose file, setup, engine lock).
 
-Documents: the specification (`docs/specification.md`), the execution plan (`docs/execution-plan.md`), the decision records (`docs/adr/`), the gate records (`docs/gates/`) and the milestone log with every deviation from the plan (`docs/milestones.md`).
+Documents: the specification (`docs/specification.md`), the execution plan (`docs/execution-plan.md`), the decision records (`docs/adr/`), the gate records (`docs/gates/`) the milestone log with every deviation from the plan (`docs/milestones.md`), and the response to the 2026-11-08 architecture review with the repair plan (`docs/review-response-2026-11-08.md`).
 
 ## Not yet implemented
 
