@@ -1,6 +1,6 @@
 # ADR-005: Models propose only
 
-**Status:** Proposed, 2026-11-08 (accepted with the execution plan)
+**Status:** Accepted 2026-11-08 with the execution plan. Extended by ADR-006 (Proposed), which says how a decision binds to an assertion revision.
 
 ## Context
 

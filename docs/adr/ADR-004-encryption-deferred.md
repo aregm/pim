@@ -1,6 +1,6 @@
 # ADR-004: Encryption deferred with a compatible layout
 
-**Status:** Proposed, 2026-11-08 (accepted with the execution plan)
+**Status:** Accepted 2026-11-08 with the execution plan. The v0.2 work is treated as a schema and key-management migration on the model of ADR-006, with a restore path tested first (`04-execution-plan.md`, section 6).
 
 ## Context
 

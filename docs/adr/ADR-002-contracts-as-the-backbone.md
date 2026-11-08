@@ -1,6 +1,6 @@
 # ADR-002: Contracts as the backbone
 
-**Status:** Proposed, 2026-11-08 (accepted with the execution plan)
+**Status:** Accepted 2026-11-08 with the execution plan. Enforcement is completed by repair phase R4 (parsing at every worker, generated Python models, a typed IPC envelope); the decision is unchanged.
 
 ## Context
 

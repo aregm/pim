@@ -1,6 +1,6 @@
 # ADR-003: One SQLite database with derived tables
 
-**Status:** Proposed, 2026-11-08 (accepted with the execution plan)
+**Status:** Accepted 2026-11-08 with the execution plan. Built with `node:sqlite` rather than better-sqlite3 (milestone M1), which changes no part of the decision. The sentence "the engine queue dispatches" is superseded by ADR-007 (Proposed).
 
 ## Context
 

@@ -1,6 +1,6 @@
 # Milestones and deviations
 
-The record of what each milestone delivered and where it departed from the plan (`execution-plan.md`), kept as it was written at the time. Each gate's full record is in `gates/`.
+The record of what each milestone delivered and where it departed from the plan (`archive/execution-plan-v0.1.md`), kept as it was written at the time. Each gate's full record is in `gates/`.
 
 ## Milestone M0: scaffold and engine
 

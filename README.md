@@ -8,7 +8,7 @@ PIM runs on a Mac with Apple Silicon. Everything stays on the machine: the origi
 
 Most of what a person learns arrives as a web page, a PDF, a photo of a whiteboard, a voice memo or a video, not as a note they wrote. Note-taking tools ask for writing first and filing second, and what was never written down cannot be found. Clippers and read-later tools keep the page but not the connection. Cloud assistants remember, but on someone else's computer, and their answers float free of the source.
 
-PIM takes a different position, written down in `docs/specification.md`:
+PIM takes a different position, written down in `docs/01-requirements.md` and `docs/02-intent.md`:
 
 - **Capture first, with a receipt.** One capture point for a link, text, a file or the clipboard. Within a moment the item shows `received`, and `preserved` once the bytes are safely on disk. Capturing the same thing twice yields one item.
 - **The original is the truth.** Everything derived, a passage, a transcript line, an OCR box, a tag, an entity, a summary, a link, points back to the exact place in the source: a paragraph, a page and box, a time in the recording. Opening any of them opens the original there.
@@ -125,7 +125,7 @@ The rehearsal (`tests/e2e/rehearsal.mjs`) drives a fresh install through first r
 
 Layout: `apps/desktop` (Electron: the main process is the trusted core and the only writer to the vault, the renderer is sandboxed), `packages/vault` (SQLite through `node:sqlite`, FTS5, sqlite-vec, export and backup), `packages/contracts` (the Zod schemas every message obeys), `packages/worker-*` (TypeScript workers: parse, web preserve, model), `workers-py/media` (Python: transcription, OCR, keyframes), `infra` (compose file, setup, engine lock).
 
-Documents: the specification (`docs/specification.md`), the execution plan (`docs/execution-plan.md`), the decision records (`docs/adr/`), the gate records (`docs/gates/`) the milestone log with every deviation from the plan (`docs/milestones.md`), and the response to the 2026-11-08 architecture review with the repair plan (`docs/review-response-2026-11-08.md`).
+Documents, in reading order (`docs/README.md` is the index): the requirements (`docs/01-requirements.md`), the design intent (`docs/02-intent.md`), the architecture with C4 diagrams (`docs/03-architecture.md`), the execution plan (`docs/04-execution-plan.md`), the decision records (`docs/adr/`), the gate records (`docs/gates/`), the milestone log with every deviation from the plan (`docs/milestones.md`), the response to the 2026-11-08 architecture review (`docs/review-response-2026-11-08.md`), and the approved v1.0 specification and v0.1 plan as the baseline (`docs/archive/`).
 
 ## Not yet implemented
 

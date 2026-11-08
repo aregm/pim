@@ -1,6 +1,6 @@
 # ADR-001: iii as core infrastructure
 
-**Status:** Proposed, 2026-11-08 (accepted with the execution plan)
+**Status:** Accepted 2026-11-08 with the execution plan. The clause assigning the stage queue to the engine is superseded by ADR-007 (Proposed); the rest stands.
 
 ## Context
 

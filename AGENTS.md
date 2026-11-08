@@ -8,18 +8,19 @@ This file is deliberately short. It points at the records instead of repeating t
 
 The design knowledge is layered. Read the layer the task touches, then follow declared relationships outward.
 
-| Question                                                                                | Where the answer is                                                               |
-| --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| Why PIM exists, for whom, and what is out of scope                                      | `docs/specification.md` §2                                                        |
-| What must be true, as testable obligations with ids (CAP-, PRS-, MET-, GRA-, SEC-, UI-) | `docs/specification.md` §3                                                        |
-| The governing concept, and which component owns what and must not do what               | `docs/specification.md` §4                                                        |
-| The data model and the words it uses                                                    | `docs/specification.md` §5                                                        |
-| Worker functions and the renderer-to-core contract                                      | `docs/specification.md` §6, `packages/contracts/src/index.ts`, `contracts/*.json` |
-| Decisions taken, each with the alternative it rejected                                  | `docs/specification.md` §1 (D1 to D13), `docs/adr/`                               |
-| What was built, where it deviated from the plan, and the evidence                       | `docs/milestones.md`, `docs/gates/`                                               |
-| What is known to be wrong and the order it will be repaired in                          | `docs/review-response-2026-11-08.md`                                              |
+| Question                                                                                | Where the answer is                                                                          |
+| --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Why PIM exists, for whom, and what is out of scope                                      | `docs/01-requirements.md` sections 1 and 10                                                  |
+| What must be true, as testable obligations with ids (CAP-, PRS-, MET-, GRA-, SEC-, UI-) | `docs/01-requirements.md` sections 3 to 8; the words they use, section 2                     |
+| The governing concept, its entailments, and what should be cheap to change              | `docs/02-intent.md`                                                                          |
+| Which container owns what and must not do what; the contracts on four axes              | `docs/03-architecture.md` sections 3, 5 and 7                                                |
+| The data model                                                                          | `docs/03-architecture.md` section 8                                                          |
+| Worker functions and the renderer-to-core contract                                      | `packages/contracts/src/index.ts`, `contracts/*.json`, `docs/03-architecture.md` section 7.2 |
+| Decisions taken, each with the alternative it rejected                                  | `docs/02-intent.md` section 7 (D1 to D13), `docs/adr/`                                       |
+| What was built, where it deviated from the plan, and the evidence                       | `docs/milestones.md`, `docs/gates/`                                                          |
+| What is known to be wrong and the order it will be repaired in                          | `docs/review-response-2026-11-08.md`                                                         |
 
-A task on the parse worker needs the `ExtractRequest` and `Extraction` contracts, the parse worker's row in §4's table and the gate 2 record. It does not need the graph code. A task on the renderer needs the IPC contract and the renderer's "must not" column in §4. Read more only along a dependency you can name.
+A task on the parse worker needs the `ExtractRequest` and `Extraction` contracts, the parse worker's row in the architecture's container table and the gate 2 record. It does not need the graph code. A task on the renderer needs the IPC contract and the renderer's "must not" column in that table. Read more only along a dependency you can name.
 
 ## 2. Before changing anything, say what you are betting on
 
@@ -44,7 +45,7 @@ PIM's vocabulary carries rules. An **artifact** is immutable evidence. A **fragm
 
 ## 4. Boundaries, contracts and interfaces
 
-The responsibility table in `docs/specification.md` §4 is binding. The main process is the only writer to the vault. The renderer never reaches Node, the filesystem or the network. Workers never touch the vault and return proposals, never writes. The iii engine holds no canonical state.
+The container table in `docs/03-architecture.md` section 3 is binding. The main process is the only writer to the vault. The renderer never reaches Node, the filesystem or the network. Workers never touch the vault and return proposals, never writes. The iii engine holds no canonical state.
 
 An interface is a relationship, not a signature. Every function registered on the engine and every IPC handler states four things in its contract's doc comment: **representation** (the shape, which `packages/contracts` enforces), **meaning** (what the value denotes: which blob, which units, what an absent field means), **timing and ordering** (may it arrive twice, out of order, late) and **failure** (who retries, who gives up, what state each side is left in). Types alone cover the first.
 
@@ -62,13 +63,13 @@ Prefer deep modules to shallow ones: an interface that makes the wrong operation
 
 Some changes are implementation. Others reopen a decision. The second kind needs the owner, Areg Melik-Adamyan, before the code is written, not after. A change is a **decision delta** when it does any of the following:
 
-- changes the meaning of a status, a predicate, an id or a table's rule in §5;
-- moves a responsibility across a row of §4's table, or lets a component do something in its "must not" column;
-- contradicts a D-decision in §1 or an ADR, including the alternatives they rejected: an adapter layer around iii (D3), security or performance gates in v0.1 (D13), auto-accepting model output (D10);
+- changes the meaning of a status, a predicate, an id or a table's rule (`docs/01-requirements.md` section 2, `docs/03-architecture.md` section 8);
+- moves a responsibility across a row of the container table, or lets a container do something in its "must not" column;
+- contradicts a D-decision (`docs/02-intent.md` section 7) or an ADR, including the alternatives they rejected: an adapter layer around iii (D3), security or performance gates in v0.1 (D13), auto-accepting model output (D10);
 - adds a path by which bytes leave the machine, gives a model write authority, or gives a worker access to the vault;
 - changes an acceptance criterion, a gate threshold, or what a harness measures.
 
-For such a change, write the decision first as an ADR in `docs/adr/`, status Proposed, in the format the existing records use: Context, Decision, Consequences (the costs as well as the gains), Revisit when. Name the alternative you rejected and why. Then stop; do not implement past the decision while it is open. Edits to `docs/specification.md` are shown as a proposal before they are applied.
+For such a change, write the decision first as an ADR in `docs/adr/`, status Proposed, in the format the existing records use: Context, Decision, Consequences (the costs as well as the gains), Revisit when. Name the alternative you rejected and why. Then stop; do not implement past the decision while it is open. Edits to the requirements, the intent or the architecture documents are shown as a proposal before they are applied.
 
 A decision record is a why-chain written down. Its rationale must name a live quality the decision serves, not a historical circumstance. If an existing record's premise is now false, say so; superseding a record is how the corpus stays honest.
 
