@@ -1,0 +1,10 @@
+node_modules/
+.tooling/
+**/.iii/
+out/
+dist/
+.venv/
+*.log
+.DS_Store
+.env
+data/
