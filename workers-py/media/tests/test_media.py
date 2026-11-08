@@ -1,7 +1,6 @@
 """Run with: .tooling/py/bin/python -m unittest discover -s workers-py/media/tests  (from the repository root)."""
 
 import os
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -36,14 +35,35 @@ def make_video(path: str, seconds=(4, 4, 4), fps=10):
             out.mux(packet)
 
 
+def make_tone(path: str, seconds=1.5, rate=44100, hz=440.0):
+    """A sine tone as a 16-bit stereo WAV, so decoding has to resample and downmix."""
+    import math
+    import struct
+    import wave
+
+    frames = int(seconds * rate)
+    with wave.open(path, "wb") as out:
+        out.setnchannels(2)
+        out.setsampwidth(2)
+        out.setframerate(rate)
+        data = bytearray()
+        for i in range(frames):
+            v = int(12000 * math.sin(2 * math.pi * hz * i / rate))
+            data += struct.pack("<hh", v, v)
+        out.writeframes(bytes(data))
+
+
 class MediaTests(unittest.TestCase):
-    def test_decode_audio_from_speech_sample(self):
+    def test_decode_audio_resamples_a_generated_wav(self):
+        # A tone written by the test itself: 1.5 s, stereo, 44.1 kHz. The decoder must bring it to 16 kHz mono.
+        # (An earlier version asked macOS `say` for a speech sample; a CI runner without a voice returned 5 ms.)
         with tempfile.TemporaryDirectory() as tmp:
-            aiff = os.path.join(tmp, "s.aiff")
-            subprocess.run(["say", "-o", aiff, "one two three"], check=True)
-            samples, duration_ms = decode_audio(aiff)
-            self.assertGreater(duration_ms, 500)
+            wav = os.path.join(tmp, "tone.wav")
+            make_tone(wav, seconds=1.5)
+            samples, duration_ms = decode_audio(wav)
+            self.assertTrue(1450 <= duration_ms <= 1550, duration_ms)
             self.assertAlmostEqual(len(samples) / 16000, duration_ms / 1000, places=1)
+            self.assertGreater(float(abs(samples).max()), 0.1)
 
     def test_keyframes_at_scene_changes(self):
         with tempfile.TemporaryDirectory() as tmp:
