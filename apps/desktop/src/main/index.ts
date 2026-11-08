@@ -53,7 +53,7 @@ const load = (win: BrowserWindow, hash: string) => {
 }
 
 const webPreferences = () => ({
-  preload: join(import.meta.dirname, '../preload/index.js'),
+  preload: join(import.meta.dirname, '../preload/index.cjs'),
   sandbox: true,
   contextIsolation: true,
 })
