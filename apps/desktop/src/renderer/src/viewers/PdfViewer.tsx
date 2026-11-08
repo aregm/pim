@@ -42,11 +42,13 @@ export function PdfViewer({
         const scale = width / page.getViewport({ scale: 1 }).width
         const viewport = page.getViewport({ scale })
         const wrap = document.createElement('div')
-        wrap.style.cssText = `position:relative;margin:16px auto;width:${viewport.width}px;height:${viewport.height}px;box-shadow:0 1px 4px rgba(0,0,0,.2)`
+        // The page is rendered once at the pane's width at mount time and then sized by CSS, so it still fits when
+        // the pane narrows (the fragment list arrives after the viewer) and never clips.
+        wrap.style.cssText = `position:relative;margin:16px auto;width:100%;max-width:${viewport.width}px;aspect-ratio:${viewport.width}/${viewport.height};box-shadow:0 1px 4px rgba(0,0,0,.2)`
         const canvas = document.createElement('canvas')
         canvas.width = viewport.width * devicePixelRatio
         canvas.height = viewport.height * devicePixelRatio
-        canvas.style.cssText = 'width:100%;height:100%'
+        canvas.style.cssText = 'display:block;width:100%;height:100%'
         wrap.appendChild(canvas)
         root.appendChild(wrap)
         const ctx = canvas.getContext('2d')
@@ -65,9 +67,11 @@ export function PdfViewer({
           ) as [number, number]
           const [x0, y0, x1, y1] = [ax, ay, bx, by]
           const box = document.createElement('div')
-          const left = Math.min(x0, x1)
-          const top = Math.min(y0, y1)
-          box.style.cssText = `position:absolute;left:${left - 2}px;top:${top - 2}px;width:${Math.abs(x1 - x0) + 4}px;height:${Math.abs(y1 - y0) + 4}px;background:rgba(255,242,168,.45);outline:2px solid #e3b800;border-radius:3px`
+          // Percentages of the page, so the box follows the CSS size of the canvas.
+          const pct = (v: number, of: number) => `${(100 * v) / of}%`
+          const left = Math.min(x0, x1) - 2
+          const top = Math.min(y0, y1) - 2
+          box.style.cssText = `position:absolute;left:${pct(left, viewport.width)};top:${pct(top, viewport.height)};width:${pct(Math.abs(x1 - x0) + 4, viewport.width)};height:${pct(Math.abs(y1 - y0) + 4, viewport.height)};background:rgba(255,242,168,.45);outline:2px solid #e3b800;border-radius:3px`
           wrap.appendChild(box)
           wrap.scrollIntoView({ block: 'center' })
         }
