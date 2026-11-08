@@ -34,15 +34,15 @@ PIM takes a different position, written down in `docs/specification.md`:
 
 ## Compared with other personal information managers
 
-| | PIM | Note-taking apps | Web clippers and read-later tools | Cloud AI memory tools |
-| --- | --- | --- | --- | --- |
-| What you put in | Anything: links, files, photos, recordings, video, text | Mostly what you write | Web pages and articles | Whatever the service ingests |
-| Where it lives | Your disk, one SQLite file and a folder of originals | Your disk or their cloud | Their cloud | Their cloud |
-| Finding something | A remembered phrase, across modalities, no filing | Titles, folders, backlinks you made | Full text of pages | Chat over the service's index |
-| From a derived fact to the source | One click to the exact paragraph, page box or second | A page, if you linked it | The page | Often none |
-| Who decides what is true | You; models only suggest, with provenance | You | You | The model's answer |
-| Works offline, without a model | Yes | Yes | Partly | No |
-| Leaving | Export opens without the app; import keeps every id and link | Usually Markdown | Export varies | Rarely complete |
+|                                   | PIM                                                          | Note-taking apps                    | Web clippers and read-later tools | Cloud AI memory tools         |
+| --------------------------------- | ------------------------------------------------------------ | ----------------------------------- | --------------------------------- | ----------------------------- |
+| What you put in                   | Anything: links, files, photos, recordings, video, text      | Mostly what you write               | Web pages and articles            | Whatever the service ingests  |
+| Where it lives                    | Your disk, one SQLite file and a folder of originals         | Your disk or their cloud            | Their cloud                       | Their cloud                   |
+| Finding something                 | A remembered phrase, across modalities, no filing            | Titles, folders, backlinks you made | Full text of pages                | Chat over the service's index |
+| From a derived fact to the source | One click to the exact paragraph, page box or second         | A page, if you linked it            | The page                          | Often none                    |
+| Who decides what is true          | You; models only suggest, with provenance                    | You                                 | You                               | The model's answer            |
+| Works offline, without a model    | Yes                                                          | Yes                                 | Partly                            | No                            |
+| Leaving                           | Export opens without the app; import keeps every id and link | Usually Markdown                    | Export varies                     | Rarely complete               |
 
 The nearest existing tools are local document managers that index and classify files. PIM differs in treating voice, video and photos as first-class sources with timed and boxed passages, in attaching evidence to every suggestion and link, and in being built on an open worker architecture (the [iii](https://github.com/iii-hq/iii) engine with typed contracts in `contracts/`), so a new modality or model is one more worker in any language.
 
