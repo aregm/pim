@@ -36,6 +36,12 @@ containers:
       OLLAMA_URL: http://127.0.0.1:11434
     scripts:
       run: node src/index.ts
+  ade: # iii's console: traces, logs, workers and their settings, at http://127.0.0.1:3114 (3113 is the registry default)
+    worker: package://ade
+    version: "1.9.74"
+    restart: on-failure
+    config_override:
+      http_port: 3114
   http:
     worker: package://api.workers.iii.dev/http
     version: "0.22.8"

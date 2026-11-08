@@ -1,5 +1,41 @@
 version: 1
 containers:
+  ade:
+    worker: package://ade
+    requested: 1.9.74
+    resolved:
+      name: ade
+      version: 1.9.74
+      type: binary
+      artifacts:
+        aarch64-apple-darwin:
+          sha256: cf50844b53b66821fd1b0127f4edf5742d6d109a074d7507c97c861d4ae7f341
+          url: https://api.workers.iii.dev/download/ade/1.9.74/aarch64-apple-darwin
+        aarch64-pc-windows-msvc:
+          sha256: 94183569de1e0862cc898800bad86f8e3859db80bdc57aea35fbefcb251113a8
+          url: https://api.workers.iii.dev/download/ade/1.9.74/aarch64-pc-windows-msvc
+        aarch64-unknown-linux-gnu:
+          sha256: b2ec68d483e2d32ff837485b500bde066ba993e510ba35f9b464f6b46398578e
+          url: https://api.workers.iii.dev/download/ade/1.9.74/aarch64-unknown-linux-gnu
+        armv7-unknown-linux-gnueabihf:
+          sha256: ca21bcacf0c988d4fcbcd80f804d4000b58526e906098ab9d4b998c37d5a2413
+          url: https://api.workers.iii.dev/download/ade/1.9.74/armv7-unknown-linux-gnueabihf
+        x86_64-apple-darwin:
+          sha256: dfc451ea2e91c89476783d007a6886d57334dd1df51b4deca8a79b8ea2f25bf1
+          url: https://api.workers.iii.dev/download/ade/1.9.74/x86_64-apple-darwin
+        x86_64-pc-windows-msvc:
+          sha256: 8c0f03acd46ee2d273fcdfe48b451ac63fee1e3ff1f802102607253e1a83a1ff
+          url: https://api.workers.iii.dev/download/ade/1.9.74/x86_64-pc-windows-msvc
+        x86_64-unknown-linux-gnu:
+          sha256: 85269202feb3ba8d25ea6c218ec887ebb8b9bcb357fc0b0673131c81f0ca79ae
+          url: https://api.workers.iii.dev/download/ade/1.9.74/x86_64-unknown-linux-gnu
+        x86_64-unknown-linux-musl:
+          sha256: a96d827da4a64e641642384b357845589392e0690aa072c5320b218d603dfa5b
+          url: https://api.workers.iii.dev/download/ade/1.9.74/x86_64-unknown-linux-musl
+      default_config:
+        data_dir: data/ade
+        http_host: 0.0.0.0
+        http_port: 3113
   http:
     worker: package://api.workers.iii.dev/http
     requested: 0.22.8
@@ -48,5 +84,7 @@ containers:
         port: 3111
         webhook_listener: null
 graphs:
+  ade:
+  - ade
   http:
   - http
