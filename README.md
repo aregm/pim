@@ -1,88 +1,145 @@
 # PIM
 
-A local-first multimodal knowledge desktop: capture anything, parse and analyze it on the machine, keep every derived fact attached to its source, and see the connections as a graph. Electron app, iii engine as core infrastructure, TypeScript and Python workers.
+A local-first desktop application for one person's knowledge: capture anything you read, hear, watch or write, let the machine read it, and later find it by a phrase you remember, open it at the exact place, and see what it connects to and why.
 
-Specification: `docs/specification.md` (approved 2026-11-03). Plan: `docs/execution-plan.md`. Decisions: `docs/adr/`.
+PIM runs on a Mac with Apple Silicon. Everything stays on the machine: the originals, the text extracted from them, the local models' suggestions, and the graph. v0.1 is complete and was verified on 2026-11-04 by a scripted first afternoon with five real pieces (`docs/gates/gate-6.md`).
 
-## Milestone M0: scaffold and engine
+## The intention
 
-What exists: the Electron shell with the screen navigation, the pinned iii engine started by compose, a TypeScript worker (`parse`) and a Python worker (`media`) that register health functions, the contracts package with JSON Schema export, and the Gate 0 check.
+Most of what a person learns arrives as a web page, a PDF, a photo of a whiteboard, a voice memo or a video, not as a note they wrote. Note-taking tools ask for writing first and filing second, and what was never written down cannot be found. Clippers and read-later tools keep the page but not the connection. Cloud assistants remember, but on someone else's computer, and their answers float free of the source.
 
-v0.1 vaults are not encrypted (ADR-004). Nothing leaves the machine: the engine binds `127.0.0.1` and runs with telemetry off.
+PIM takes a different position, written down in `docs/specification.md`:
 
-## Milestone M1: capture and inbox
+- **Capture first, with a receipt.** One capture point for a link, text, a file or the clipboard. Within a moment the item shows `received`, and `preserved` once the bytes are safely on disk. Capturing the same thing twice yields one item.
+- **The original is the truth.** Everything derived, a passage, a transcript line, an OCR box, a tag, an entity, a summary, a link, points back to the exact place in the source: a paragraph, a page and box, a time in the recording. Opening any of them opens the original there.
+- **Nothing leaves the machine.** No account, no sync, no telemetry. The engine binds to the loopback interface. Models run locally through Ollama and whisper.cpp; there is no remote model path at all in v0.1.
+- **Models propose, you decide.** Tags, entities, summaries and link candidates land as suggestions with the model and prompt recorded, and become yours only when accepted. Every screen works with no model installed.
+- **A graph that explains itself.** Each edge carries the evidence it rests on, and the view says why every node is visible.
 
-What exists: the capture panel on a global shortcut (default Cmd+Shift+Space) and a menu bar item, paste, drop and clipboard capture, watched folders, a loopback capture endpoint through iii's `http` worker, the vault (SQLite through `node:sqlite`, content-addressed blobs), durable receipts with a job runner for preservation, a web-preserve worker (its own Electron process: readable HTML, full-page screenshot, metadata), and the Inbox, Library, Item and Settings screens. Gate 1 record: `docs/gates/gate-1.md`.
+## What it does today
 
-## Milestone M2: item view and search
+**Capture** by global shortcut (Cmd+Shift+Space by default) and menu bar item, paste, drag and drop onto the window, the clipboard, watched folders with a copy or move policy, and a loopback endpoint on port 3111 for scripts.
 
-What exists: the parse worker (`extract::text`) turns HTML, PDF, text, Markdown and `.eml` into fragments with selectors (block index, page plus box plus span, or character span); fragments carry a processing run; FTS5 indexes fragment text and titles; the Library searches as you type with a kind filter; the Item screen shows the source (readable HTML in a sandboxed frame, PDF pages, text, images) and highlights the selected fragment; `kernel::search` exposes the same search on the engine. Gate 2 record: `docs/gates/gate-2.md`.
+**Modalities**: web pages (a readable copy plus a full-page screenshot), PDF, images, audio, video (the audio track and keyframes at scene changes), plain text, Markdown and `.eml` files.
 
-## Milestone M3: multimodal extraction
+**Reading** happens in the pipeline: text extraction with selectors for HTML, PDF, text and email; OCR with Apple Vision for photos and image-only PDFs; transcription with whisper.cpp; captions for images and keyframes, embeddings, and schema-constrained extraction of entities, tags, dates and a summary through Ollama. Deterministic links (explicit links between pages, shared rare terms, captures close in time) never wait on a model; model links (shared entities, semantic neighbours) follow.
 
-What exists: the Python media worker transcribes audio and the audio track of video with whisper.cpp (`media::transcribe`, timed fragments), recognises text in images with Apple Vision (`media::ocr`, boxed fragments) and in image-only PDFs by rendering pages with pdfium (`media::ocr_pdf`), and cuts keyframes at scene changes with PyAV (`media::keyframes`). The Item screen plays audio and video with a transcript that seeks on click and follows playback, shows a keyframe strip, and draws OCR boxes on images. Gate 3 record: `docs/gates/gate-3.md`.
+**Finding**: the Library searches as you type, lexically at once and hybrid with vectors when Ollama is up. A hit opens the item at the passage: the readable page, the rendered PDF page, the highlighted OCR box, or the player positioned at the line.
 
-## Milestone M6: export, backup, first run, packaging
+**Deciding**: the Inbox lists suggestions for review with the keyboard or a click; the item view accepts or rejects a summary, tags, entities and dates in place.
 
-What exists: export of selected items (Library) or everything (Settings) as a folder of Markdown and JSON with the attachments and a manifest that opens without the app (`packages/vault/src/transfer.ts`); import of such a package that keeps every id, link and attachment and reopens enrichment so vectors are rebuilt (MET-3, MET-5); backup as a snapshot folder taken while the app runs, a restore test into a temporary folder that opens every item and runs a search, and a restore into a fresh folder the app then switches to (SEC-4); the vault folder changeable in place; a first-run screen (vault folder, shortcut, what works right now, capture one item, find it again) with the time to the first searchable item in the log (UI-7); the deterministic link stage moved ahead of model enrichment so no suggestion waits on a model; `npm run package`, which stages the pinned engine, the TypeScript workers with their production dependencies and the Python worker's sources into the app and builds an unsigned `PIM.app` and DMG with electron-builder; the packaged app starts its own engine when none answers (the TypeScript workers run on the app's Node, the web-preserve worker is the app launched with `--web-preserve`, the media worker runs from the Python runtime named in Settings); and the first-afternoon rehearsal as a Playwright script (`npm run rehearsal`, `tests/e2e/rehearsal.mjs`) over the corpus described in `tests/corpus/README.md`. Gate 6 record: `docs/gates/gate-6.md`.
+**Seeing**: the Graph screen draws a bounded neighbourhood around an item on WebGL, with dimension toggles, a details panel for the selected node or edge and its cited passages, plus table and timeline projections.
 
-Deviations from the plan: the Python runtime is not packaged (spec 5: a pinned interpreter); the packaged app uses the environment `infra/setup.sh` builds, named in Settings, and says in first run what is unavailable without it. The app is not signed or notarised. Backups are manual; the daily encrypted snapshot waits for encryption in v0.2. Playwright drives file captures through the same call the drop handler makes, since the operating system's drag cannot be scripted.
+**Keeping**: export of a selection or everything as Markdown and JSON with the attachments, readable without the app and importable with every id and link intact; backup as a snapshot taken while the app runs, a restore test, and restore into a new folder the app switches to; the vault folder changeable in Settings.
 
-## Milestone M5: enrichment with models
+## Compared with other personal information managers
 
-What exists: a model worker (`packages/worker-model`, TypeScript) that talks to Ollama on localhost only and registers `enrich::models`, `enrich::embed`, `enrich::extract` and `enrich::caption`; an `enrich` stage in the core between extract and link that captions images and video keyframes, embeds every fragment (vectors in sqlite-vec, one virtual table per model dimension, plus an artifact centroid) and runs schema-constrained extraction at temperature zero in Ollama's JSON-schema mode (entities with kind and aliases, tags, dates, a summary and a cleaned title, each with evidence fragment ids, chunked with overlap, validated and retried up to three times, committed in one transaction); entity resolution by kind and normalised name or alias with `possible_duplicate` proposals for close name vectors; two more link generators (`shared_entities`, `semantic_neighbours` over artifact centroids with the closest fragments of both ends as evidence); hybrid search in the Library (reciprocal rank fusion of FTS5 and vector neighbours, lexical alone when Ollama is down); the summary, suggested entities, tags and dates on the Item screen with accept and reject in place; caption fragments marked as model output; a Models section in Settings that detects Ollama and lets the three model names change. Everything the models produce is `suggested` with a processing run that records the model and prompt digests (ADR-005, MET-1). Schema v4. Gate 5 record: `docs/gates/gate-5.md`.
+| | PIM | Note-taking apps | Web clippers and read-later tools | Cloud AI memory tools |
+| --- | --- | --- | --- | --- |
+| What you put in | Anything: links, files, photos, recordings, video, text | Mostly what you write | Web pages and articles | Whatever the service ingests |
+| Where it lives | Your disk, one SQLite file and a folder of originals | Your disk or their cloud | Their cloud | Their cloud |
+| Finding something | A remembered phrase, across modalities, no filing | Titles, folders, backlinks you made | Full text of pages | Chat over the service's index |
+| From a derived fact to the source | One click to the exact paragraph, page box or second | A page, if you linked it | The page | Often none |
+| Who decides what is true | You; models only suggest, with provenance | You | You | The model's answer |
+| Works offline, without a model | Yes | Yes | Partly | No |
+| Leaving | Export opens without the app; import keeps every id and link | Usually Markdown | Export varies | Rarely complete |
 
-Deviations from the plan: the worker receives fragment texts in the request instead of fetching them through the core (one hop less, same bounded context); captions live as fragments of the raw payload under their own processor instead of a separate caption table; the cleaned title is kept on the note, not applied to the item. Ollama is installed with Homebrew (`brew install ollama`, run as a Homebrew service) and the models are `nomic-embed-text`, `qwen2.5:7b` and `qwen2.5vl:7b`; `infra/setup.sh` does not install them.
+The nearest existing tools are local document managers that index and classify files. PIM differs in treating voice, video and photos as first-class sources with timed and boxed passages, in attaching evidence to every suggestion and link, and in being built on an open worker architecture (the [iii](https://github.com/iii-hq/iii) engine with typed contracts in `contracts/`), so a new modality or model is one more worker in any language.
 
-## Milestone M4: knowledge graph
+## Install
 
-What exists: entities and typed relations with evidence and status (schema v3); three deterministic link generators that run as a `link` stage after extraction (explicit links between captured pages, shared rare terms through the FTS5 vocabulary, captures close in time); a budgeted neighbourhood query that says why each node is visible; `kernel::neighborhood`, `kernel::relations`, `kernel::review`, `kernel::tag` on the engine; the Graph screen on Sigma.js 4 (ForceAtlas2 layout, items as circles coloured by kind, entities as diamonds, arrows coloured by dimension, suggested edges faint) with dimension toggles, a details panel on the right for the selected node or edge (its metadata, its connections, and every cited passage as a row that opens the item at that page, paragraph or time), highlight of the selection and its neighbours, drag to pin, double-click to refocus, and table and timeline projections; tags and connections on the Item screen; and inbox triage of suggestions with the keyboard. Gate 4 record: `docs/gates/gate-4.md`.
-
-## Run it (macOS on Apple Silicon)
+**Requirements.** macOS on Apple Silicon (14 or later), 16 GB of memory recommended, Node.js 26 or later, Python 3.12 with `venv`, and Git. Models are optional and come from [Ollama](https://ollama.com), installed with Homebrew:
 
 ```bash
-npm install
-npm run setup          # downloads the pinned iii engine by checksum and the Python worker runtime into .tooling/
-npm run engine         # terminal 1: engine + workers, stays in the foreground
-npm run dev            # terminal 2: the Electron app
-npm run gate0          # with the engine running: catalog, loopback, telemetry checks
-npm run package        # stages the runtime and builds apps/desktop/dist/mac-arm64/PIM.app and the DMG
-npm run rehearsal      # the first-afternoon rehearsal against the built app (add --packaged for PIM.app)
+brew install ollama && brew services start ollama
 ```
 
-The packaged app brings its own engine and workers; Ollama (models) and the Python runtime for audio and OCR stay host installs. A packaged app started while `npm run engine` runs joins that engine instead. The two keep separate profiles (`~/Library/Application Support/PIM Dev` for `npm run dev`, `PIM` for the packaged app), so both can run at once; a gate run names its own with `--user-data-dir`.
+```bash
+ollama pull nomic-embed-text && ollama pull qwen2.5:7b && ollama pull qwen2.5vl:7b
+```
 
-`npm test` runs the unit tests, `npm run lint` runs Biome, `npm run contracts` regenerates `contracts/*.json`.
+The whisper.cpp speech model downloads on the first transcription into `.tooling/models` (the packaged app uses its own models folder).
 
-## Deviations recorded in M4
+**From source.**
 
-- Link candidates are computed in the core from the vault, and the layout runs in the renderer; the planned link-and-layout worker is not needed at this size.
-- Model-extracted entities and captions arrived in M5; in M4 the only entities were tags the person added.
-- Clusters beyond the budget (GRA-4) are not drawn yet; the view reports how many nodes it hid.
+```bash
+git clone <this repository> pim && cd pim && npm install
+```
 
-## Deviations recorded in M3
+```bash
+npm run setup
+```
 
-- OCR uses Apple Vision through pyobjc inside the Python worker instead of a separate Swift helper; Tesseract remains the portable fallback to add for other platforms.
-- Transcription is serialized inside the media worker: whisper.cpp contexts are not thread-safe.
-- Image and keyframe captions arrived in M5 through the vision model.
-- The media worker's runtime is a `python3 -m venv` with pinned wheels (`workers-py/media/requirements.txt`); `npm run setup` installs it and `npm run test:py` runs its tests.
+`npm run setup` downloads the pinned iii engine by checksum (`infra/engine.lock`) and builds the Python runtime for audio and OCR into `.tooling/`. It makes no global changes and can be run again at any time.
 
-## Deviations recorded in M2
+**The packaged app.**
 
-- The parse worker reads a blob by path, read-only, on the same machine; bytes do not cross the bus. Workers still never write the vault.
-- The web viewer blocks scripts, navigation and remote images; captured pages show their text and local structure only.
+```bash
+npm run package
+```
 
-## Deviations recorded in M1
+This stages the engine, the workers and their dependencies into the app and builds `apps/desktop/dist/mac-arm64/PIM.app` and a DMG. The app is not signed or notarised, so on another Mac use right-click, Open the first time. It starts its own engine and workers; Ollama and the Python runtime stay host installs. For audio and OCR, point Settings, Runtime at the Python environment `npm run setup` built (`<repository>/.tooling/py`) and relaunch.
 
-- SQLite through Node's built-in `node:sqlite` (FTS5 compiled in, extension loading available) instead of better-sqlite3: same engine, no native rebuild against Electron. Spec D4 names the library; the decision, one SQLite database with derived tables, is unchanged.
-- The job table is the queue and the core calls stage functions directly with retries and backoff; the engine's queue worker is not added until a stage needs fan-out.
-- The capture endpoint secret sits in `settings.json` in v0.1 (spec D13 defers the Keychain).
-- The http worker's host is set through `configuration::set` after the first boot; `config_override` alone did not change a running worker.
+## Run
 
-## Deviations from the plan recorded in M0
+From source, two terminals in the repository:
 
-- npm workspaces instead of pnpm and Turborepo, and a `python3 -m venv` instead of uv: neither tool is installed on the reference Mac and M0 needs no global installs. The layout is the one from the plan; switching is a tooling change, not a code change.
-- No RBAC in M0: spec D13 defers the security architecture to v0.2, and nothing untrusted connects to the engine yet.
-- Compose starts the engine and the workers; the Electron app is started separately and joins the engine as the `desktop` worker.
+```bash
+npm run engine
+```
 
-The engine writes its trace archive to `data/` in the repository root while running; it is git-ignored and holds no payloads in M0.
+```bash
+npm run dev
+```
+
+The first starts the engine and the workers and stays in the foreground; the second starts the app, which joins that engine. The packaged app needs neither: double-click it. If it finds an engine from `npm run engine` running, it joins that one instead of starting its own.
+
+The two keep separate profiles (`~/Library/Application Support/PIM Dev` for the source build, `PIM` for the packaged app), so both can run at once.
+
+On the first run the app walks through five steps: the vault folder, the shortcut, what works right now (which workers and models answer), one capture of sample text, and finding it again. It takes under a minute.
+
+**Putting things in.** Press the shortcut, paste a link or text and press Return; drop files on the window; choose Capture clipboard in the menu bar; add a watched folder in Settings; or post to the endpoint with the secret shown in Settings:
+
+```bash
+curl -s http://127.0.0.1:3111/capture -H "x-pim-secret: $SECRET" -H "content-type: application/json" -d '{"kind":"url","url":"https://en.wikipedia.org/wiki/Lighthouse"}'
+```
+
+The body is one of `{"kind":"url","url":…}`, `{"kind":"text","text":…,"title":…}` or `{"kind":"file","path":…}`.
+
+**Getting things out.** Settings has Export everything, Import a package, Back up now, Test a restore and Restore into a new folder; the Library exports a selection. The vault itself is a folder you can copy while the app runs: `vault.sqlite` and `blobs/`.
+
+## Develop and verify
+
+```bash
+npm test               # unit tests: vault, contracts, model worker
+npm run test:py        # the Python media worker
+npm run lint           # Biome
+npm run contracts      # regenerates contracts/*.json from the Zod schemas
+npm run gate0          # with the engine running: catalog, loopback, telemetry checks
+npm run rehearsal      # the first-afternoon rehearsal (add --packaged for PIM.app)
+```
+
+The rehearsal (`tests/e2e/rehearsal.mjs`) drives a fresh install through first run, five captures, search, opening each at its passage, two accepted links, the graph, an export round trip and a backup with restore test. Its corpus is described in `tests/corpus/README.md`.
+
+Layout: `apps/desktop` (Electron: the main process is the trusted core and the only writer to the vault, the renderer is sandboxed), `packages/vault` (SQLite through `node:sqlite`, FTS5, sqlite-vec, export and backup), `packages/contracts` (the Zod schemas every message obeys), `packages/worker-*` (TypeScript workers: parse, web preserve, model), `workers-py/media` (Python: transcription, OCR, keyframes), `infra` (compose file, setup, engine lock).
+
+Documents: the specification (`docs/specification.md`), the execution plan (`docs/execution-plan.md`), the decision records (`docs/adr/`), the gate records (`docs/gates/`) and the milestone log with every deviation from the plan (`docs/milestones.md`).
+
+## Not yet implemented
+
+v0.1 chose function and interface over the security architecture and the quality budgets, which the specification records as v0.2 targets. What is missing, by area:
+
+- **Encryption and secrets.** The vault is not encrypted by the app; it relies on FileVault. The capture secret sits in `settings.json`, not the Keychain. The schema and blob layout already leave room for per-blob encryption and a vault key.
+- **Security hardening.** No access control on the engine bus, no verified egress policy, no separate labelled channel for captured content in model prompts, and no prompt-injection corpus. The renderer sandbox and loopback binding are what the platform gives.
+- **Backups** are taken by hand. The daily encrypted snapshot waits for encryption.
+- **Capture surfaces.** The browser extension that uses the endpoint, office documents and email accounts beyond dropped `.eml` files.
+- **Capture intent** per item (reference, act, learn, develop, ignore) is stored but not shown or changeable.
+- **Graph.** Clusters beyond the node budget are counted, not drawn, so there is no semantic zoom; a person-and-source projection is missing beside the table and timeline.
+- **Remote models**, opt-in per request, have no code path yet. Grounded question answering over the vault is the first candidate for v0.2.
+- **Scale.** The quality budgets (10,000 items, 200,000 fragments, 20 GB of originals) are not measured.
+- **Packaging.** The app is unsigned; the Python runtime is not bundled; Windows and Linux builds, with Tesseract and CPU inference as the fallbacks, are not made.
+- **By design, out of scope** for v0.1 and v0.2: sharing and sync between people or devices, account connectors, sending or changing anything outside the vault, agents with write authority, a mobile client.
+
+## Licence
+
+No licence yet. The repository is private until the product posture is decided; the iii engine is under the Elastic License 2.0, which constrains a hosted offering.
