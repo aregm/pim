@@ -67,7 +67,14 @@ export interface RelationView {
   score: number | null
   score_json: Record<string, unknown> | null
   created_at: string
-  evidence: { fragment_id: string; artifact_id: string; text: string; role: string }[]
+  evidence: {
+    fragment_id: string
+    artifact_id: string
+    title: string | null
+    selector: Selector
+    text: string
+    role: string
+  }[]
 }
 export interface TagView {
   relation_id: string

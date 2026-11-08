@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { uuidv7 } from './id.ts'
+import type { Selector } from './index.ts'
 
 export type NodeKind = 'item' | 'entity'
 export type RelationStatus = 'suggested' | 'accepted' | 'rejected' | 'superseded'
@@ -37,6 +38,15 @@ export interface RelationRow {
   run_id: string | null
   created_at: string
   updated_at: string
+}
+
+export interface Evidence {
+  fragment_id: string
+  artifact_id: string
+  title: string | null
+  selector: Selector
+  text: string
+  role: string
 }
 
 export interface EntityRow {
@@ -188,19 +198,14 @@ export class Graph {
     this.db.prepare('DELETE FROM relation WHERE id = ?').run(id)
   }
 
-  evidence(
-    relationId: string,
-  ): { fragment_id: string; artifact_id: string; text: string; role: string }[] {
-    return this.db
+  /** Evidence fragments of a relation with where they sit in their item, for clickable lists. */
+  evidence(relationId: string): Evidence[] {
+    const rows = this.db
       .prepare(
-        'SELECT e.fragment_id, f.artifact_id, f.text, e.role FROM relation_evidence e JOIN fragment f ON f.id = e.fragment_id WHERE e.relation_id = ?',
+        'SELECT e.fragment_id, f.artifact_id, i.title, f.selector_json, f.text, e.role FROM relation_evidence e JOIN fragment f ON f.id = e.fragment_id LEFT JOIN item i ON i.id = f.artifact_id WHERE e.relation_id = ?',
       )
-      .all(relationId) as unknown as {
-      fragment_id: string
-      artifact_id: string
-      text: string
-      role: string
-    }[]
+      .all(relationId) as unknown as (Omit<Evidence, 'selector'> & { selector_json: string })[]
+    return rows.map(({ selector_json, ...r }) => ({ ...r, selector: JSON.parse(selector_json) }))
   }
 
   /** Relations touching a node, any status except superseded. */
