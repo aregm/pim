@@ -33,7 +33,11 @@ const ENGINE_URL = process.env.III_URL ?? 'ws://127.0.0.1:49140'
 const started = Date.now()
 
 // The main process is the trusted core and one worker on the engine (spec D3, ADR-001), in the `pim` namespace.
-const iii = registerWorker(ENGINE_URL, { workerName: 'desktop', namespace: 'pim' })
+// A second instance on this machine (another vault, a gate run) sets PIM_WORKER_NAME: it registers under its own
+// name and leaves the engine's kernel functions and the capture endpoint to the primary instance.
+const WORKER_NAME = process.env.PIM_WORKER_NAME ?? 'desktop'
+const PRIMARY = WORKER_NAME === 'desktop'
+const iii = registerWorker(ENGINE_URL, { workerName: WORKER_NAME, namespace: 'pim' })
 let settings: Settings = loadSettings()
 let core: Core
 let mainWindow: BrowserWindow | undefined
@@ -150,6 +154,8 @@ protocol.registerSchemesAsPrivileged([
 
 app.whenReady().then(() => {
   core = new Core(settings.vaultDir, iii)
+  core.models = settings.models
+  console.log(JSON.stringify({ event: 'app.start', worker: WORKER_NAME, primary: PRIMARY }))
   core.on('changed', broadcast)
   core.start()
   protocol.handle('pim-blob', (request: Request) => {
@@ -169,70 +175,72 @@ app.whenReady().then(() => {
   watcher.apply(settings.watchedFolders)
 
   // ---- functions on the engine ----
-  iii.registerFunction('kernel::ping', async () =>
-    PingResponse.parse({ pong: true, at: new Date().toISOString() }),
-  )
-  iii.registerFunction('kernel::health', async () =>
-    HealthResponse.parse({
-      worker: 'desktop',
-      version: VERSION,
-      ok: true,
-      uptime_ms: Date.now() - started,
-    }),
-  )
-  iii.registerFunction('kernel::receipt', (input: unknown) =>
-    core.receive(CaptureRequest.parse(input), 'api'),
-  )
-  iii.registerFunction('kernel::retry', async (input: unknown) => {
-    const { item_id, stage } = input as { item_id: string; stage?: string }
-    if (stage) core.requeue(String(item_id), String(stage))
-    else core.retry(String(item_id))
-    return { ok: true }
-  })
-  iii.registerFunction('kernel::neighborhood', async (input: unknown) => {
-    const q = NeighbourhoodRequest.parse(input)
-    return core.vault.neighbourhood(q.node, {
-      budget: q.budget,
-      includeSuggested: q.include_suggested,
-      predicates: q.predicates,
-      maxHops: q.max_hops,
+  if (PRIMARY) {
+    iii.registerFunction('kernel::ping', async () =>
+      PingResponse.parse({ pong: true, at: new Date().toISOString() }),
+    )
+    iii.registerFunction('kernel::health', async () =>
+      HealthResponse.parse({
+        worker: 'desktop',
+        version: VERSION,
+        ok: true,
+        uptime_ms: Date.now() - started,
+      }),
+    )
+    iii.registerFunction('kernel::receipt', (input: unknown) =>
+      core.receive(CaptureRequest.parse(input), 'api'),
+    )
+    iii.registerFunction('kernel::retry', async (input: unknown) => {
+      const { item_id, stage } = input as { item_id: string; stage?: string }
+      if (stage) core.requeue(String(item_id), String(stage))
+      else core.retry(String(item_id))
+      return { ok: true }
     })
-  })
-  iii.registerFunction('kernel::review', async (input: unknown) => {
-    const { relation_id, status } = ReviewRequest.parse(input)
-    core.review(relation_id, status)
-    return { ok: true }
-  })
-  iii.registerFunction('kernel::tag', async (input: unknown) => {
-    const { item_id, label } = TagRequest.parse(input)
-    return core.tag(item_id, label)
-  })
-  iii.registerFunction('kernel::relations', async (input: unknown) => ({
-    relations: core.relations(String((input as { item_id: string }).item_id)),
-  }))
-  iii.registerFunction('kernel::search', async (input: unknown) => {
-    const { query, limit } = SearchRequest.parse(input)
-    return { hits: core.search(query, limit) }
-  })
-  // CAP-4: loopback endpoint through iii's http worker; the secret is checked here, not in the worker.
-  iii.registerFunction(
-    'capture::http',
-    async (req: { headers: Record<string, string>; body: unknown }) => {
-      if (!secretOk(req.headers ?? {}))
-        return { status_code: 401, body: { error: 'missing or wrong x-pim-secret' } }
-      const parsed = CaptureRequest.safeParse(req.body)
-      if (!parsed.success)
-        return {
-          status_code: 400,
-          body: { error: 'invalid capture request', issues: parsed.error.issues },
-        }
-      return { status_code: 200, body: await core.receive(parsed.data, 'http') }
-    },
-  )
-  iii.observe(
-    { function_id: 'http::on-request', args: { method: 'POST', path: '/capture' } },
-    'capture::http',
-  )
+    iii.registerFunction('kernel::neighborhood', async (input: unknown) => {
+      const q = NeighbourhoodRequest.parse(input)
+      return core.vault.neighbourhood(q.node, {
+        budget: q.budget,
+        includeSuggested: q.include_suggested,
+        predicates: q.predicates,
+        maxHops: q.max_hops,
+      })
+    })
+    iii.registerFunction('kernel::review', async (input: unknown) => {
+      const { relation_id, status } = ReviewRequest.parse(input)
+      core.review(relation_id, status)
+      return { ok: true }
+    })
+    iii.registerFunction('kernel::tag', async (input: unknown) => {
+      const { item_id, label } = TagRequest.parse(input)
+      return core.tag(item_id, label)
+    })
+    iii.registerFunction('kernel::relations', async (input: unknown) => ({
+      relations: core.relations(String((input as { item_id: string }).item_id)),
+    }))
+    iii.registerFunction('kernel::search', async (input: unknown) => {
+      const { query, limit } = SearchRequest.parse(input)
+      return { hits: await core.search(query, limit) }
+    })
+    // CAP-4: loopback endpoint through iii's http worker; the secret is checked here, not in the worker.
+    iii.registerFunction(
+      'capture::http',
+      async (req: { headers: Record<string, string>; body: unknown }) => {
+        if (!secretOk(req.headers ?? {}))
+          return { status_code: 401, body: { error: 'missing or wrong x-pim-secret' } }
+        const parsed = CaptureRequest.safeParse(req.body)
+        if (!parsed.success)
+          return {
+            status_code: 400,
+            body: { error: 'invalid capture request', issues: parsed.error.issues },
+          }
+        return { status_code: 200, body: await core.receive(parsed.data, 'http') }
+      },
+    )
+    iii.observe(
+      { function_id: 'http::on-request', args: { method: 'POST', path: '/capture' } },
+      'capture::http',
+    )
+  }
 
   // ---- IPC: the only way the renderer reaches the core ----
   ipcMain.handle('capture', (_e, req: unknown, surface: string) =>
@@ -242,7 +250,12 @@ app.whenReady().then(() => {
   ipcMain.handle('items:list', () => core.items())
   ipcMain.handle('items:payloads', (_e, id: string) => core.vault.payloads(id))
   ipcMain.handle('items:fragments', (_e, id: string) => core.vault.fragments(id))
-  ipcMain.handle('items:search', (_e, query: string) => core.search(String(query), 50))
+  ipcMain.handle('items:search', (_e, query: string, hybrid?: boolean) =>
+    core.search(String(query), 50, hybrid === true),
+  )
+  ipcMain.handle('items:notes', (_e, id: string) => core.notes(String(id)))
+  ipcMain.handle('items:enrich', (_e, id: string) => core.requeue(String(id), 'enrich'))
+  ipcMain.handle('models:status', (_e, force?: boolean) => core.modelsStatus(force === true))
   ipcMain.handle('items:relations', (_e, id: string) => core.relations(id))
   ipcMain.handle('items:suggestions', () => core.suggestions())
   ipcMain.handle('items:tags', (_e, id: string) => core.vault.graph.tags(id))
@@ -280,6 +293,7 @@ app.whenReady().then(() => {
   ipcMain.handle('settings:set', (_e, patch: Partial<Settings>) => {
     settings = { ...settings, ...patch }
     saveSettings(settings)
+    core.models = settings.models
     registerShortcut()
     watcher.apply(settings.watchedFolders)
     return settings

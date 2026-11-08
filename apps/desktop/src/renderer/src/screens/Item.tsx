@@ -1,5 +1,12 @@
 import { useEffect, useState } from 'react'
-import type { FragmentView, ItemView, PayloadView, RelationView, TagView } from '../pim.d.ts'
+import type {
+  FragmentView,
+  ItemView,
+  NoteView,
+  PayloadView,
+  RelationView,
+  TagView,
+} from '../pim.d.ts'
 import { Button, Chip, colors, kindLabel, when } from '../ui.tsx'
 import { HtmlViewer } from '../viewers/HtmlViewer.tsx'
 import { ImageViewer } from '../viewers/ImageViewer.tsx'
@@ -31,6 +38,7 @@ export function Item({
   const [selected, setSelected] = useState<string | null>(focusFragment)
   const [tags, setTags] = useState<TagView[]>([])
   const [relations, setRelations] = useState<RelationView[]>([])
+  const [notes, setNotes] = useState<NoteView[]>([])
   const [newTag, setNewTag] = useState('')
   useEffect(() => {
     void window.pim.payloads(item.id).then(setPayloads)
@@ -39,6 +47,7 @@ export function Item({
     const loadGraph = () => {
       void window.pim.tags(item.id).then(setTags)
       void window.pim.relations(item.id).then(setRelations)
+      void window.pim.notes(item.id).then(setNotes)
     }
     loadGraph()
     return window.pim.onItemsChanged(loadGraph)
@@ -127,6 +136,7 @@ export function Item({
           </span>
           <Button onClick={() => void window.pim.openSource(item.id)}>Open original</Button>
           <Button onClick={() => onShowInGraph(item.id)}>Show in graph</Button>
+          <Button onClick={() => void window.pim.enrich(item.id)}>Enrich again</Button>
         </div>
       </div>
       <div style={{ display: 'flex', gap: 16, flex: 1, minHeight: 0 }}>
@@ -142,6 +152,72 @@ export function Item({
           {viewer}
         </div>
         <aside style={{ flex: 1, overflow: 'auto', fontSize: 13, minWidth: 220 }}>
+          {notes.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <strong>Summary</strong>{' '}
+              <span style={{ color: colors.muted }}>
+                model output
+                {notes[0]?.run?.model_digest &&
+                  ` · ${notes[0].run.processor} · ${notes[0].run.model_digest.slice(7, 19)}`}
+              </span>
+              {notes.map((n) => (
+                <div
+                  key={n.item_id}
+                  style={{
+                    margin: '6px 0',
+                    padding: 8,
+                    borderRadius: 6,
+                    border: `1px dashed ${n.status === 'accepted' ? colors.ok : colors.border}`,
+                    background: n.status === 'rejected' ? '#f6f6f6' : '#fbfbf5',
+                    color: n.status === 'rejected' ? colors.muted : 'inherit',
+                  }}
+                >
+                  {n.title && n.title !== item.title && (
+                    <div style={{ color: colors.muted, fontSize: 12 }}>
+                      suggested title: {n.title}
+                    </div>
+                  )}
+                  {n.text}
+                  <div style={{ marginTop: 4, fontSize: 12, color: colors.muted }}>
+                    {n.status ?? 'suggested'}
+                    {n.status === 'suggested' && n.relation_id && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void window.pim.review(n.relation_id as string, 'accepted')
+                          }
+                          style={{
+                            marginLeft: 6,
+                            border: 0,
+                            background: 'none',
+                            color: colors.ok,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          accept
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void window.pim.review(n.relation_id as string, 'rejected')
+                          }
+                          style={{
+                            border: 0,
+                            background: 'none',
+                            color: colors.bad,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          reject
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
           <strong>Fragments</strong>{' '}
           <span style={{ color: colors.muted }}>
             {fragments.filter((f) => f.selector.kind !== 'time').length || fragments.length}
@@ -169,6 +245,21 @@ export function Item({
                     <span
                       style={{ color: colors.muted, marginRight: 6 }}
                     >{`${Math.floor(f.selector.start_ms / 60000)}:${String(Math.floor(f.selector.start_ms / 1000) % 60).padStart(2, '0')}`}</span>
+                  )}
+                  {f.processor.startsWith('enrich::') && (
+                    <span
+                      title={`model output (${f.processor})`}
+                      style={{
+                        fontSize: 10,
+                        color: colors.warn,
+                        border: `1px solid ${colors.warn}`,
+                        borderRadius: 8,
+                        padding: '0 5px',
+                        marginRight: 6,
+                      }}
+                    >
+                      model
+                    </span>
                   )}
                   {f.text.length > 140 ? `${f.text.slice(0, 140)}…` : f.text}
                 </button>
@@ -211,6 +302,43 @@ export function Item({
                   </button>
                 </span>
               ))}
+              {relations
+                .filter((r) => r.predicate === 'tagged' && r.status === 'suggested')
+                .map((r) => (
+                  <span
+                    key={r.id}
+                    title={`suggested by ${r.author}${r.run?.model_digest ? ` (${r.run.model_digest.slice(7, 15)})` : ''}`}
+                    style={{
+                      border: `1px dashed ${colors.warn}`,
+                      color: colors.warn,
+                      borderRadius: 10,
+                      padding: '1px 8px',
+                    }}
+                  >
+                    {r.object_label}{' '}
+                    <button
+                      type="button"
+                      onClick={() => void window.pim.review(r.id, 'accepted')}
+                      title="accept tag"
+                      style={{ border: 0, background: 'none', cursor: 'pointer', color: colors.ok }}
+                    >
+                      ✓
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void window.pim.review(r.id, 'rejected')}
+                      title="reject tag"
+                      style={{
+                        border: 0,
+                        background: 'none',
+                        cursor: 'pointer',
+                        color: colors.bad,
+                      }}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
               <input
                 value={newTag}
                 onChange={(e) => setNewTag(e.target.value)}
@@ -267,6 +395,7 @@ export function Item({
                       <span style={{ color: colors.muted }}>
                         {' '}
                         · {r.status} · {r.author}
+                        {r.run?.model_digest && ` · ${r.run.model_digest.slice(7, 15)}`}
                         {r.score_json &&
                           'terms' in r.score_json &&
                           ` (${(r.score_json.terms as string[]).slice(0, 4).join(', ')})`}

@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { app } from 'electron'
+import { DEFAULT_MODELS, type ModelSettings } from './core.ts'
 
 export interface WatchedFolder {
   path: string
@@ -15,6 +16,8 @@ export interface Settings {
   watchedFolders: WatchedFolder[]
   /** Per-install secret for the loopback capture endpoint (CAP-4). Plain file in v0.1 per spec D13. */
   captureSecret: string
+  /** Ollama model names for embeddings, extraction and captions (D6). */
+  models: ModelSettings
 }
 
 const file = () => join(app.getPath('userData'), 'settings.json')
@@ -25,12 +28,14 @@ export function loadSettings(): Settings {
     shortcut: 'CommandOrControl+Shift+Space',
     watchedFolders: [],
     captureSecret: randomBytes(24).toString('hex'),
+    models: { ...DEFAULT_MODELS },
   }
   if (!existsSync(file())) {
     saveSettings(defaults)
     return defaults
   }
-  return { ...defaults, ...(JSON.parse(readFileSync(file(), 'utf8')) as Partial<Settings>) }
+  const stored = JSON.parse(readFileSync(file(), 'utf8')) as Partial<Settings>
+  return { ...defaults, ...stored, models: { ...defaults.models, ...(stored.models ?? {}) } }
 }
 
 export function saveSettings(s: Settings) {

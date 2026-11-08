@@ -3,14 +3,38 @@ import { EventEmitter } from 'node:events'
 import { mkdirSync, readFileSync, rmSync, statSync, unlinkSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import {
+  CaptionResult,
   type CaptureRequest,
+  EmbedResult,
   Extraction,
   Keyframes,
+  ModelsStatus,
   type Receipt,
+  SchemaExtractResult,
+  type Selector,
   WebPreserveResult,
 } from '@pim/contracts'
-import { type ItemRow, type JobRow, Vault } from '@pim/vault'
+import { type EntityRow, type ItemRow, type JobRow, type SearchHit, Vault } from '@pim/vault'
 import type { IIIClient } from 'iii-sdk'
+
+/** Ollama model names; the digests are read from Ollama and recorded on every run (D6, MET-1). */
+export interface ModelSettings {
+  embed: string
+  text: string
+  vision: string
+}
+export const DEFAULT_MODELS: ModelSettings = {
+  embed: 'nomic-embed-text',
+  text: 'qwen2.5:7b',
+  vision: 'qwen2.5vl:7b',
+}
+/** Prefix of the job note left when the enrich stage had nothing to work with; such jobs wake when models appear. */
+const SKIPPED = 'skipped: '
+const EMBED_BATCH = 64
+/** Cosine distance under which two artifact centroids count as semantic neighbours. */
+const SEMANTIC_MAX_DISTANCE = 0.3
+/** Cosine distance under which two entity names of one kind are proposed as possible duplicates. */
+const DUPLICATE_MAX_DISTANCE = 0.15
 
 const MIME: Record<string, string> = {
   '.pdf': 'application/pdf',
@@ -55,6 +79,8 @@ export class Core extends EventEmitter {
   readonly vault: Vault
   private timer: NodeJS.Timeout | undefined
   private running = 0
+  models: ModelSettings = { ...DEFAULT_MODELS }
+  private modelsSeen: { at: number; status: ModelsStatus } | null = null
   /** Originals to delete after a `move` capture from a watched folder. */
   private readonly moveAfter = new Map<string, string>()
 
@@ -107,6 +133,11 @@ export class Core extends EventEmitter {
             stored.byte_length,
           )
           receipt = { ...receipt, state: this.vault.markPreserved(receipt.item_id, hash) }
+          // The bytes are already in hand: no preserve job, so extraction is queued here.
+          if (receipt.state === 'preserved') {
+            this.vault.enqueue(receipt.item_id, 'extract')
+            void this.tick()
+          }
         }
         break
       }
@@ -163,16 +194,384 @@ export class Core extends EventEmitter {
   }
 
   start() {
-    for (const stage of ['extract', 'link']) {
+    const interrupted = this.vault.closeStaleRuns()
+    if (interrupted) console.log(JSON.stringify({ event: 'runs.interrupted', count: interrupted }))
+    for (const stage of ['extract', 'enrich', 'link']) {
       const added = this.vault.backfill(stage)
       if (added) console.log(JSON.stringify({ event: 'jobs.backfill', stage, added }))
     }
     this.timer = setInterval(() => void this.tick(), 1000)
+    // Skipped enrichment wakes when Ollama appears; the check is cheap and local.
+    setInterval(() => void this.modelsStatus(true), 60_000)
+    void this.modelsStatus(true)
     void this.tick()
   }
 
-  search(query: string, limit?: number) {
-    return this.vault.search(query, limit)
+  /** Lexical always (PRS-8); with `hybrid`, semantic neighbours of the query are fused in by reciprocal rank. */
+  async search(query: string, limit = 50, hybrid = false): Promise<SearchHit[]> {
+    const lexical = this.vault.search(query, limit).map((h) => ({ ...h, why: 'lexical' as const }))
+    if (!hybrid || !query.trim()) return lexical
+    const status = await this.modelsStatus()
+    if (!status.ok || !this.digestOf(status, this.models.embed)) return lexical
+    let vector: Float32Array
+    try {
+      const out = await this.embedTexts([{ id: 'q', text: query }], 30_000)
+      vector = Float32Array.from(out.vectors[0]?.vector ?? [])
+    } catch (e) {
+      console.error(JSON.stringify({ event: 'search.semantic.error', message: String(e) }))
+      return lexical
+    }
+    if (vector.length === 0) return lexical
+    const semantic = new Map<string, { fragment_id: string; text: string }>()
+    for (const h of this.vault.nearestFragments(vector, limit * 2))
+      if (!semantic.has(h.item_id)) semantic.set(h.item_id, h)
+    const score = new Map<string, number>()
+    lexical.forEach((h, i) => {
+      score.set(h.item_id, (score.get(h.item_id) ?? 0) + 1 / (60 + i))
+    })
+    ;[...semantic.keys()].forEach((id, i) => {
+      score.set(id, (score.get(id) ?? 0) + 1 / (60 + i))
+    })
+    const byId = new Map(lexical.map((h) => [h.item_id, h]))
+    const out: SearchHit[] = []
+    for (const [id, s] of [...score.entries()].sort((a, b) => b[1] - a[1])) {
+      if (out.length >= limit) break
+      const lex = byId.get(id)
+      const sem = semantic.get(id)
+      if (lex) out.push({ ...lex, score: s, why: sem ? 'both' : 'lexical' })
+      else if (sem) {
+        const item = this.vault.item(id)
+        if (!item || item.state === 'duplicate') continue
+        out.push({
+          item_id: id,
+          title: item.title,
+          source_kind: item.source_kind,
+          state: item.state,
+          score: s,
+          snippet: sem.text.length > 160 ? `${sem.text.slice(0, 160)}…` : sem.text,
+          fragment_id: sem.fragment_id,
+          last_captured_at: item.last_captured_at,
+          why: 'semantic',
+        })
+      }
+    }
+    return out
+  }
+
+  // ---- M5: models through Ollama; everything they produce is suggested with a run (ADR-005, 6.4) ----
+
+  /** Whether the model worker reaches Ollama and which models exist; cached for 20 s. */
+  async modelsStatus(force = false): Promise<ModelsStatus> {
+    if (!force && this.modelsSeen && Date.now() - this.modelsSeen.at < 20_000)
+      return this.modelsSeen.status
+    let status: ModelsStatus
+    try {
+      status = ModelsStatus.parse(
+        await this.iii.trigger({ function_id: 'enrich::models', payload: {}, timeoutMs: 5_000 }),
+      )
+    } catch (e) {
+      status = {
+        ok: false,
+        url: '',
+        models: [],
+        error: `model worker: ${e instanceof Error ? e.message : String(e)}`,
+      }
+    }
+    const wasOk = this.modelsSeen?.status.ok ?? false
+    this.modelsSeen = { at: Date.now(), status }
+    if (status.ok && !wasOk) {
+      const woken = this.vault.requeueWhere('enrich', SKIPPED)
+      if (woken) {
+        console.log(JSON.stringify({ event: 'jobs.woken', stage: 'enrich', woken }))
+        void this.tick()
+      }
+    }
+    return status
+  }
+
+  private digestOf(status: ModelsStatus, model: string) {
+    return (
+      status.models.find((m) => m.name === model || m.name === `${model}:latest`)?.digest ?? null
+    )
+  }
+
+  private async embedTexts(texts: { id: string; text: string }[], timeoutMs: number) {
+    return EmbedResult.parse(
+      await this.iii.trigger({
+        function_id: 'enrich::embed',
+        payload: { model: this.models.embed, texts },
+        timeoutMs,
+      }),
+    )
+  }
+
+  private runView(runId: string | null) {
+    const r = runId ? this.vault.run(runId) : undefined
+    return r
+      ? {
+          id: r.id,
+          processor: r.processor,
+          version: r.version,
+          model_digest: r.model_digest,
+          prompt_digest: r.prompt_digest,
+          started_at: r.started_at,
+        }
+      : null
+  }
+
+  /** Model summaries of an item with their review status and run (MET-1, MET-2). */
+  notes(itemId: string) {
+    return this.vault.notes(itemId).map((n) => ({ ...n, run: this.runView(n.run_id) }))
+  }
+
+  /**
+   * The enrich stage: captions, embeddings, then schema extraction. Returns a note instead of throwing when there
+   * is nothing to do, so the stage completes and the item still reaches `link` (PRS-8).
+   */
+  private async enrich(item: ItemRow): Promise<string | undefined> {
+    if (item.state !== 'preserved') return `${SKIPPED}item is ${item.state}`
+    const status = await this.modelsStatus(true)
+    if (!status.ok) return `${SKIPPED}models unavailable (${status.error ?? 'no answer'})`
+    const missing = [this.models.embed, this.models.text].filter((m) => !this.digestOf(status, m))
+    if (missing.length) return `${SKIPPED}models not installed: ${missing.join(', ')}`
+    if (this.digestOf(status, this.models.vision)) await this.captions(item, status)
+    if (this.vault.fragments(item.id).length === 0) return `${SKIPPED}no fragments`
+    await this.embedArtifact(item, status)
+    await this.extractSchema(item, status)
+    return undefined
+  }
+
+  /** PRS-4: one caption per image and per video keyframe, stored as fragments of the raw payload, marked by their run. */
+  private async captions(item: ItemRow, status: ModelsStatus) {
+    const digest = this.digestOf(status, this.models.vision) as string
+    const payloads = this.vault.payloads(item.id)
+    const raw = payloads.find((p) => p.role === 'raw')
+    if (!raw) return
+    const targets: { blob_id: string; selector: Selector }[] = []
+    if (raw.mime.startsWith('image/'))
+      targets.push({ blob_id: raw.blob_id, selector: { kind: 'box', x: 0, y: 0, w: 0, h: 0 } })
+    const index = payloads.find((p) => p.role === 'keyframes')
+    if (raw.mime.startsWith('video/') && index) {
+      const parsed = JSON.parse(readFileSync(this.vault.blobs.pathFor(index.blob_id), 'utf8')) as {
+        keyframes: { at_ms: number; blob_id: string }[]
+      }
+      for (const kf of parsed.keyframes.slice(0, 12))
+        targets.push({
+          blob_id: kf.blob_id,
+          selector: { kind: 'time', start_ms: kf.at_ms, end_ms: kf.at_ms },
+        })
+    }
+    if (targets.length === 0) return
+    if (this.vault.lastRun(item.id, 'enrich::caption')?.model_digest === digest) return
+    const run = this.vault.startRun(item.id, 'enrich::caption', '0.5.0', {
+      model_digest: digest,
+      params: { model: this.models.vision, images: targets.length },
+    })
+    try {
+      const out = []
+      for (const [i, t] of targets.entries()) {
+        const r = CaptionResult.parse(
+          await this.iii.trigger({
+            function_id: 'enrich::caption',
+            payload: { model: this.models.vision, path: this.vault.blobs.pathFor(t.blob_id) },
+            timeoutMs: 300_000,
+          }),
+        )
+        this.vault.describeRun(run, { prompt_digest: r.prompt_digest })
+        out.push({ ordinal: 10_000 + i, selector: t.selector, text: r.caption })
+      }
+      this.vault.replaceFragments(item.id, raw.id, run, 'enrich::caption', out)
+      this.vault.finishRun(run)
+    } catch (e) {
+      this.vault.finishRun(run, e instanceof Error ? e.message : String(e))
+      throw e
+    }
+  }
+
+  /** PRS-5: a vector per fragment from the current model; vectors from any other model are dropped first. */
+  private async embedArtifact(item: ItemRow, status: ModelsStatus) {
+    const digest = this.digestOf(status, this.models.embed) as string
+    const stale = this.vault.invalidateEmbeddings(item.id, digest)
+    const todo = this.vault.fragmentsToEmbed(item.id, digest).filter((f) => f.text.trim())
+    if (todo.length === 0) return
+    const run = this.vault.startRun(item.id, 'enrich::embed', '0.5.0', {
+      model_digest: digest,
+      params: { model: this.models.embed, fragments: todo.length, stale_removed: stale },
+    })
+    try {
+      for (let i = 0; i < todo.length; i += EMBED_BATCH) {
+        const batch = todo.slice(i, i + EMBED_BATCH)
+        const out = await this.embedTexts(
+          batch.map((f) => ({ id: f.id, text: f.text })),
+          600_000,
+        )
+        if (out.model_digest !== digest)
+          throw new Error(`embedding model changed during the run: ${out.model_digest}`)
+        this.vault.putEmbeddings(
+          item.id,
+          run,
+          out.model,
+          out.model_digest,
+          out.dim,
+          out.vectors.map((v) => ({ fragment_id: v.id, vector: Float32Array.from(v.vector) })),
+        )
+      }
+      this.vault.finishRun(run)
+    } catch (e) {
+      this.vault.finishRun(run, e instanceof Error ? e.message : String(e))
+      throw e
+    }
+  }
+
+  /** PRS-6 and 6.4 step 5: schema-constrained extraction committed in one transaction, all of it suggested. */
+  private async extractSchema(item: ItemRow, status: ModelsStatus) {
+    const digest = this.digestOf(status, this.models.text) as string
+    const fragments = this.vault.fragments(item.id).filter((f) => f.text.trim())
+    if (fragments.length === 0) return
+    const inputs = createHash('sha256')
+      .update(fragments.map((f) => f.id).join('\n'))
+      .digest('hex')
+    const last = this.vault.lastRun(item.id, 'enrich::extract')
+    if (
+      last?.model_digest === digest &&
+      last.params_json &&
+      (JSON.parse(last.params_json) as { inputs?: string }).inputs === inputs
+    )
+      return // same model, same fragments: the proposals already exist
+    const run = this.vault.startRun(item.id, 'enrich::extract', '0.5.0', {
+      model_digest: digest,
+      params: { model: this.models.text, inputs, fragments: fragments.length },
+    })
+    try {
+      const result = SchemaExtractResult.parse(
+        await this.iii.trigger({
+          function_id: 'enrich::extract',
+          payload: {
+            model: this.models.text,
+            title: item.title,
+            source: item.source_uri ?? item.source_id,
+            fragments: fragments.map((f) => ({ id: f.id, text: f.text })),
+          },
+          timeoutMs: 3_600_000,
+        }),
+      )
+      this.vault.describeRun(run, {
+        model_digest: result.model_digest,
+        prompt_digest: result.prompt_digest,
+      })
+      const known = new Set(fragments.map((f) => f.id))
+      const evidence = (ids: string[]) => ids.filter((id) => known.has(id))
+      const me = { kind: 'item' as const, id: item.id }
+      const author = 'enrich::extract'
+      const created: EntityRow[] = []
+      this.vault.db.exec('BEGIN')
+      try {
+        for (const e of result.entities) {
+          const existing = this.vault.graph.findEntity(e.kind, e.name)
+          const ent = this.vault.graph.upsertEntity(e.kind, e.name, e.aliases)
+          if (!existing) created.push(ent)
+          this.vault.graph.addRelation({
+            subject: me,
+            predicate: 'mentions',
+            object: { kind: 'entity', id: ent.id },
+            author,
+            generator: result.model,
+            ...(e.aliases.length ? { score_json: { aliases: e.aliases } } : {}),
+            run_id: run,
+            evidence: evidence(e.evidence),
+          })
+        }
+        for (const t of result.tags)
+          this.vault.graph.addRelation({
+            subject: me,
+            predicate: 'tagged',
+            object: { kind: 'entity', id: this.vault.graph.upsertEntity('tag', t.label).id },
+            author,
+            generator: result.model,
+            run_id: run,
+            evidence: evidence(t.evidence),
+          })
+        for (const d of result.dates)
+          this.vault.graph.addRelation({
+            subject: me,
+            predicate: 'occurred_at',
+            object: { kind: 'entity', id: this.vault.graph.upsertEntity('date', d.iso).id },
+            author,
+            generator: result.model,
+            run_id: run,
+            evidence: evidence(d.evidence),
+          })
+        if (result.summary) {
+          const note = this.vault.upsertNote(
+            item.id,
+            author,
+            result.summary.text,
+            result.title,
+            run,
+          )
+          this.vault.graph.addRelation({
+            subject: { kind: 'item', id: note },
+            predicate: 'derived_from',
+            object: me,
+            author,
+            generator: result.model,
+            run_id: run,
+            evidence: evidence(result.summary.evidence),
+          })
+        }
+        this.vault.db.exec('COMMIT')
+      } catch (e) {
+        this.vault.db.exec('ROLLBACK')
+        throw e
+      }
+      await this.resolveEntities(created, status, run)
+      this.vault.finishRun(run)
+      console.log(
+        JSON.stringify({
+          event: 'enrich.extract',
+          item: item.id,
+          entities: result.entities.length,
+          tags: result.tags.length,
+          dates: result.dates.length,
+          summary: !!result.summary,
+          chunks: result.chunks,
+          attempts: result.attempts,
+        }),
+      )
+    } catch (e) {
+      this.vault.finishRun(run, e instanceof Error ? e.message : String(e))
+      throw e
+    }
+  }
+
+  /** New entities get a name vector; a close existing name of the same kind becomes a `possible_duplicate` proposal. */
+  private async resolveEntities(created: EntityRow[], status: ModelsStatus, run: string) {
+    const digest = this.digestOf(status, this.models.embed)
+    const candidates = created.filter((e) => e.kind !== 'tag' && e.kind !== 'date')
+    if (!digest || candidates.length === 0) return
+    const out = await this.embedTexts(
+      candidates.map((e) => ({ id: e.id, text: `${e.kind}: ${e.name}` })),
+      120_000,
+    )
+    const rows = out.vectors.map((v) => ({ entity_id: v.id, vector: Float32Array.from(v.vector) }))
+    for (const r of rows) {
+      const ent = candidates.find((c) => c.id === r.entity_id) as EntityRow
+      for (const n of this.vault.nearestEntities(r.vector, 3, [r.entity_id])) {
+        const other = this.vault.graph.entity(n.id)
+        if (!other || other.kind !== ent.kind || n.distance > DUPLICATE_MAX_DISTANCE) continue
+        this.vault.graph.addRelation({
+          subject: { kind: 'entity', id: ent.id },
+          predicate: 'possible_duplicate',
+          object: { kind: 'entity', id: other.id },
+          author: 'enrich::resolve',
+          generator: this.models.embed,
+          score: Math.round((1 - n.distance) * 1000) / 1000,
+          score_json: { distance: Math.round(n.distance * 1000) / 1000 },
+          run_id: run,
+        })
+      }
+    }
+    this.vault.putEntityVectors(digest, out.dim, rows)
   }
 
   stop() {
@@ -185,6 +584,7 @@ export class Core extends EventEmitter {
       const job =
         this.vault.claimJob('preserve') ??
         this.vault.claimJob('extract') ??
+        this.vault.claimJob('enrich') ??
         this.vault.claimJob('link')
       if (!job) return
       this.running++
@@ -202,14 +602,17 @@ export class Core extends EventEmitter {
     }
     const heartbeat = setInterval(() => this.vault.extendLease(job.id), 20_000)
     try {
+      let note: string | undefined
       if (job.stage === 'extract') await this.extract(item)
+      else if (job.stage === 'enrich') note = await this.enrich(item)
       else if (job.stage === 'link') await this.link(item)
       else if (item.source_kind === 'file') await this.preserveFile(item)
       else if (item.source_kind === 'url') await this.preserveUrl(item)
-      this.vault.completeJob(job.id)
+      this.vault.completeJob(job.id, note)
       if (job.stage === 'preserve' && this.vault.item(item.id)?.state === 'preserved')
         this.vault.enqueue(item.id, 'extract')
-      if (job.stage === 'extract') this.vault.requeue(item.id, 'link')
+      if (job.stage === 'extract') this.vault.requeue(item.id, 'enrich')
+      if (job.stage === 'enrich') this.vault.requeue(item.id, 'link')
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
       const state = this.vault.failJob(job.id, message)
@@ -469,6 +872,54 @@ export class Core extends EventEmitter {
           run_id: run,
         })
       }
+      // 4. shared entities, proposed or accepted on both ends (6.4 step 7)
+      // An accepted entity on both ends counts 1, a proposed one 0.5, a proposed tag 0: suggestions from
+      // generic model tags alone do not become link proposals.
+      for (const shared of this.vault.graph.sharedEntities(item.id)) {
+        if (skip(shared.artifact_id) || shared.score < 1) continue
+        this.vault.graph.addRelation({
+          subject: me,
+          predicate: 'related_to',
+          object: { kind: 'item', id: shared.artifact_id },
+          author: 'link::shared_entities',
+          generator: 'shared_entities',
+          score: shared.score,
+          score_json: { entities: shared.entities.slice(0, 8) },
+          run_id: run,
+          evidence: shared.evidence,
+        })
+      }
+      // 5. semantic neighbours: nearest artifact centroids; evidence is the closest fragments of each end
+      const mine = this.vault.artifactVector(item.id)
+      if (mine) {
+        for (const n of this.vault.nearestArtifacts(mine.vector, 5, [item.id])) {
+          if (n.distance > SEMANTIC_MAX_DISTANCE || skip(n.id)) continue
+          const theirs = this.vault.artifactVector(n.id)
+          const evidence = [
+            ...this.vault
+              .nearestFragments(mine.vector, 40)
+              .filter((f) => f.item_id === n.id)
+              .slice(0, 2),
+            ...(theirs
+              ? this.vault
+                  .nearestFragments(theirs.vector, 40)
+                  .filter((f) => f.item_id === item.id)
+                  .slice(0, 2)
+              : []),
+          ].map((f) => f.fragment_id)
+          this.vault.graph.addRelation({
+            subject: me,
+            predicate: 'related_to',
+            object: { kind: 'item', id: n.id },
+            author: 'link::semantic_neighbours',
+            generator: 'semantic_neighbours',
+            score: Math.round((1 - n.distance) * 1000) / 1000,
+            score_json: { distance: Math.round(n.distance * 1000) / 1000 },
+            run_id: run,
+            evidence,
+          })
+        }
+      }
       this.vault.finishRun(run)
     } catch (e) {
       this.vault.finishRun(run, e instanceof Error ? e.message : String(e))
@@ -522,6 +973,7 @@ export class Core extends EventEmitter {
       subject_label: label(r.subject_kind, r.subject_id),
       object_label: label(r.object_kind, r.object_id),
       evidence: this.vault.graph.evidence(r.id),
+      run: this.runView(r.run_id),
     }
   }
 }

@@ -120,6 +120,84 @@ export const SearchRequest = z.object({
   limit: z.number().int().positive().max(200).optional(),
 })
 
+// ---- M5: the model worker (enrich::*). Texts travel with their ids; the worker never touches the vault. ----
+
+export const TextRef = z.object({ id: z.string(), text: z.string() })
+
+export const EmbedRequest = z.object({ model: z.string(), texts: z.array(TextRef).min(1) })
+export type EmbedRequest = z.infer<typeof EmbedRequest>
+export const EmbedResult = z.object({
+  model: z.string(),
+  model_digest: z.string(),
+  dim: z.number().int().positive(),
+  vectors: z.array(z.object({ id: z.string(), vector: z.array(z.number()) })),
+})
+export type EmbedResult = z.infer<typeof EmbedResult>
+
+export const EntityKind = z.enum(['person', 'organisation', 'concept', 'place'])
+/**
+ * The schema the text model must answer with, per chunk (specification 6.4). Evidence holds fragment ids. The
+ * bounded form is what Ollama's JSON-schema mode enforces per chunk; the merged answer for a long document may
+ * hold more entities than one chunk, so the result uses the unbounded form.
+ */
+const extraction = (bounded: boolean) => {
+  const list = <T extends z.ZodType>(item: T, max: number) =>
+    bounded ? z.array(item).max(max) : z.array(item)
+  return z.object({
+    entities: list(
+      z.object({
+        name: z.string().min(1).max(120),
+        kind: EntityKind,
+        aliases: list(z.string().max(120), 5),
+        evidence: list(z.string(), 6),
+      }),
+      20,
+    ),
+    tags: list(z.object({ label: z.string().min(1).max(60), evidence: list(z.string(), 6) }), 8),
+    dates: list(z.object({ iso: z.string().max(10), evidence: list(z.string(), 6) }), 10),
+    summary: z.object({ text: z.string().max(1200), evidence: list(z.string(), 8) }).nullable(),
+    title: z.string().max(200).nullable(),
+  })
+}
+export const SchemaExtraction = extraction(true)
+export type SchemaExtraction = z.infer<typeof SchemaExtraction>
+export const SchemaExtractionMerged = extraction(false)
+
+export const SchemaExtractRequest = z.object({
+  model: z.string(),
+  title: z.string().nullable(),
+  source: z.string().nullable(),
+  fragments: z.array(TextRef).min(1),
+})
+export type SchemaExtractRequest = z.infer<typeof SchemaExtractRequest>
+export const SchemaExtractResult = SchemaExtractionMerged.extend({
+  model: z.string(),
+  model_digest: z.string(),
+  prompt_digest: z.string(),
+  chunks: z.number().int().positive(),
+  attempts: z.number().int().positive(),
+})
+export type SchemaExtractResult = z.infer<typeof SchemaExtractResult>
+
+export const CaptionRequest = z.object({ model: z.string(), path: z.string() })
+export type CaptionRequest = z.infer<typeof CaptionRequest>
+export const CaptionResult = z.object({
+  model: z.string(),
+  model_digest: z.string(),
+  prompt_digest: z.string(),
+  caption: z.string(),
+})
+export type CaptionResult = z.infer<typeof CaptionResult>
+
+/** Answer of `enrich::models`: whether Ollama answers on localhost and which models it holds. */
+export const ModelsStatus = z.object({
+  ok: z.boolean(),
+  url: z.string(),
+  models: z.array(z.object({ name: z.string(), digest: z.string() })),
+  error: z.string().optional(),
+})
+export type ModelsStatus = z.infer<typeof ModelsStatus>
+
 /** Every contract that is exported to `contracts/*.json` for the Python worker. */
 export const exported = {
   health: HealthResponse,
@@ -130,6 +208,14 @@ export const exported = {
   extract_request: ExtractRequest,
   extraction: Extraction,
   keyframes: Keyframes,
+  embed_request: EmbedRequest,
+  embed_result: EmbedResult,
+  schema_extraction: SchemaExtraction,
+  schema_extract_request: SchemaExtractRequest,
+  schema_extract_result: SchemaExtractResult,
+  caption_request: CaptionRequest,
+  caption_result: CaptionResult,
+  models_status: ModelsStatus,
 } as const
 
 export const toJsonSchema = (schema: z.ZodType) =>

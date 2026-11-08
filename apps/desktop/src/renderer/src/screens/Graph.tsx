@@ -60,18 +60,22 @@ export function GraphScreen({
   const [projection, setProjection] = useState<'graph' | 'table' | 'timeline'>('graph')
   const [data, setData] = useState<Neighbourhood | null>(null)
   const [sel, setSel] = useState<Selection>(null)
+  // The focus is keyed by kind and id: the parent may hand a fresh object on every refresh, and reloading on
+  // identity alone would clear the selection every time a job finishes.
+  const focusKey = focus ? `${focus.kind}:${focus.id}` : ''
   const load = useCallback(async () => {
-    if (!focus) return
+    if (!focusKey) return
+    const [kind, id] = focusKey.split(/:(.*)/) as ['item' | 'entity', string]
     const predicates = Object.entries(dims).flatMap(([k, on]) => (on ? (DIMENSIONS[k] ?? []) : []))
     setData(
       await window.pim.neighbourhood({
-        node: focus,
+        node: { kind, id },
         budget,
         include_suggested: suggested,
         predicates,
       }),
     )
-  }, [focus, dims, budget, suggested])
+  }, [focusKey, dims, budget, suggested])
   useEffect(() => {
     setSel(null)
     void load()
@@ -212,7 +216,7 @@ export function GraphScreen({
   useEffect(() => {
     const sigma = sigmaRef.current
     const g = graphRef.current
-    if (!sigma || !g) return
+    if (!sigma || !g || !data) return // runs again after a reload rebuilds sigma
     sigma.setNodesState(g.nodes(), { isHighlighted: false })
     sigma.setEdgesState(g.edges(), { isHighlighted: false })
     if (sel?.kind === 'node' && g.hasNode(sel.key)) {
@@ -226,7 +230,7 @@ export function GraphScreen({
       sigma.setNodesState(g.extremities(sel.id), { isHighlighted: true })
     }
     sigma.setGraphState({ hasHighlighted: sel !== null })
-  }, [sel])
+  }, [sel, data])
 
   if (!focus)
     return (
