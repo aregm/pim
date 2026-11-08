@@ -1,6 +1,6 @@
 # ADR-002: Contracts as the backbone
 
-**Status:** Proposed, 2026-11-03 (accepted with the execution plan)
+**Status:** Proposed, 2026-11-08 (accepted with the execution plan)
 
 ## Context
 

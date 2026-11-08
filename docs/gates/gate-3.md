@@ -1,6 +1,6 @@
 # Gate 3: every modality
 
-**Run:** 2026-11-03, on the reference Mac (Apple Silicon, macOS 27.0.1, Python 3.12.2, whisper.cpp through pywhispercpp 1.5.1 with the `base` model), commit: the M3 commit.
+**Run:** 2026-11-08, on the reference Mac (Apple Silicon, macOS 27.0.1, Python 3.12.2, whisper.cpp through pywhispercpp 1.5.1 with the `base` model), commit: the M3 commit.
 
 | Check                                                                                                 | Result                                                                                                                                                                                                                                                                                                              |
 | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

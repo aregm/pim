@@ -1,8 +1,8 @@
 # PIM Execution Plan v0.1
 
-Nov 3, 2026 · @Areg
+Nov 8, 2026 · @Areg
 
-**Status:** Approved on 2026-11-03, repository at ~/pim, working name PIM kept. Executes the approved specification (docs/specification.md). M0 started the same day.
+**Status:** Approved on 2026-11-08, repository at ~/pim, working name PIM kept. Executes the approved specification (docs/specification.md). M0 started the same day.
 
 ## 1. Milestones and gates
 

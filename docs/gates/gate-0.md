@@ -1,6 +1,6 @@
 # Gate 0: everything connects
 
-**Run:** 2026-11-03, on the reference Mac (Apple Silicon, macOS 27.0.1, Node 26.12.0, Python 3.12.2), commit: the initial commit.
+**Run:** 2026-11-08, on the reference Mac (Apple Silicon, macOS 27.0.1, Node 26.12.0, Python 3.12.2), commit: the initial commit.
 
 | Check                                                                                        | Result                                                                                                                          |
 | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |

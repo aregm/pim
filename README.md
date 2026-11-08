@@ -2,7 +2,7 @@
 
 A local-first desktop application for one person's knowledge: capture anything you read, hear, watch or write, let the machine read it, and later find it by a phrase you remember, open it at the exact place, and see what it connects to and why.
 
-PIM runs on a Mac with Apple Silicon. Everything stays on the machine: the originals, the text extracted from them, the local models' suggestions, and the graph. v0.1 is complete and was verified on 2026-11-04 by a scripted first afternoon with five real pieces (`docs/gates/gate-6.md`).
+PIM runs on a Mac with Apple Silicon. Everything stays on the machine: the originals, the text extracted from them, the local models' suggestions, and the graph. v0.1 is complete and was verified on 2026-11-08 by a scripted first afternoon with five real pieces (`docs/gates/gate-6.md`).
 
 ## The intention
 

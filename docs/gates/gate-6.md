@@ -1,6 +1,6 @@
 # Gate 6: the first-afternoon rehearsal
 
-Run on 2026-11-04 (early morning) on the reference Mac (Apple M1 Max, 32 GB, macOS 27, Electron 45.2.1, iii 0.25.0, Ollama via Homebrew), twice: against the packaged `PIM.app` built by `npm run package` (unsigned, arm64, 416 MB on disk, 160 MB DMG), which started its own bundled engine, and against the development build joined to the repository engine. Both runs are the Playwright script `tests/e2e/rehearsal.mjs` (`npm run rehearsal [--packaged]`) over the corpus in `tests/corpus/README.md`, from a fresh profile each time. Nothing waited on a model: Ollama was running and enriching in the background, and every step was satisfied by deterministic stages.
+Run on 2026-11-08 (early morning) on the reference Mac (Apple M1 Max, 32 GB, macOS 27, Electron 45.2.1, iii 0.25.0, Ollama via Homebrew), twice: against the packaged `PIM.app` built by `npm run package` (unsigned, arm64, 416 MB on disk, 160 MB DMG), which started its own bundled engine, and against the development build joined to the repository engine. Both runs are the Playwright script `tests/e2e/rehearsal.mjs` (`npm run rehearsal [--packaged]`) over the corpus in `tests/corpus/README.md`, from a fresh profile each time. Nothing waited on a model: Ollama was running and enriching in the background, and every step was satisfied by deterministic stages.
 
 ## What was run
 

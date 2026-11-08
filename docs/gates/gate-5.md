@@ -1,6 +1,6 @@
 # Gate 5: proposals only
 
-Run on 2026-11-03 (late evening) on the reference Mac (Apple M1 Max, 32 GB, macOS 27, Electron 45.2.1, iii 0.25.0, Ollama via Homebrew with `nomic-embed-text`, `qwen2.5:7b`, `qwen2.5vl:7b`), against an isolated copy of the development vault (22 artifacts: a Wikipedia article of 349 fragments, PDFs, scanned PDF, image, audio, video, text, HTML, `.eml`), driven by a second app instance (`PIM_WORKER_NAME=gate`) over the DevTools protocol, with the vault inspected read-only in SQLite.
+Run on 2026-11-08 (late evening) on the reference Mac (Apple M1 Max, 32 GB, macOS 27, Electron 45.2.1, iii 0.25.0, Ollama via Homebrew with `nomic-embed-text`, `qwen2.5:7b`, `qwen2.5vl:7b`), against an isolated copy of the development vault (22 artifacts: a Wikipedia article of 349 fragments, PDFs, scanned PDF, image, audio, video, text, HTML, `.eml`), driven by a second app instance (`PIM_WORKER_NAME=gate`) over the DevTools protocol, with the vault inspected read-only in SQLite.
 
 ## What was run
 

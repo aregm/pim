@@ -1,6 +1,6 @@
 # Gate 4: explained edges
 
-**Run:** 2026-11-03, on the reference Mac, commit: the M4 commit. Driven through `kernel::relations`, `kernel::neighborhood`, `kernel::review`, `kernel::tag` and `kernel::retry` on the engine against the live vault of 27 items.
+**Run:** 2026-11-08, on the reference Mac, commit: the M4 commit. Driven through `kernel::relations`, `kernel::neighborhood`, `kernel::review`, `kernel::tag` and `kernel::retry` on the engine against the live vault of 27 items.
 
 | Check                                                                                                                                               | Result                                                                                                                                                                                                                                                                                                      |
 | --------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -16,7 +16,7 @@
 
 Notes: two defects were found and fixed during the run. The hand-off from the extract stage to the link stage was missing, so new items were never linked until the next start; and the explicit-link generator read only the readable HTML of web captures, not the raw HTML of a dropped file. On this test vault, where everything was captured within minutes, `co_capture` produced 122 suggestions; on real captures spread over days it is rare. It stays capped at five per item at score 0.1 and is easy to reject in bulk from the inbox.
 
-## Addendum, 2026-11-03: graph view redesign
+## Addendum, 2026-11-08: graph view redesign
 
 The first graph view drew nodes as overlapping discs: Sigma 4 reads `size` in position units by default (`itemSizesReference: "positions"`) and has edge events off, so edges could not be clicked either. Redesigned the same day: sizes in screen pixels, ForceAtlas2 with strong gravity and size-aware collision, circles by item kind and diamonds for entities, arrows coloured by dimension, suggested edges faint, selection highlight with the rest faded, and a right-hand panel with clickable lists (connections and cited passages for a node, evidence passages for an edge; each passage row names the item and its page, paragraph or time and opens the item there). Evidence rows now carry the fragment selector and the item title (`Graph.evidence`).
 

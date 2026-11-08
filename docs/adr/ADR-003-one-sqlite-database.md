@@ -1,6 +1,6 @@
 # ADR-003: One SQLite database with derived tables
 
-**Status:** Proposed, 2026-11-03 (accepted with the execution plan)
+**Status:** Proposed, 2026-11-08 (accepted with the execution plan)
 
 ## Context
 

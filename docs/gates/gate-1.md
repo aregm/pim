@@ -1,6 +1,6 @@
 # Gate 1: five real captures
 
-**Run:** 2026-11-03, on the reference Mac (Apple Silicon, macOS 27.0.1, Node 26.12.0, Electron 45.2.1 with Node 24.22.1, Python 3.12.2), commit: the M1 commit.
+**Run:** 2026-11-08, on the reference Mac (Apple Silicon, macOS 27.0.1, Node 26.12.0, Electron 45.2.1 with Node 24.22.1, Python 3.12.2), commit: the M1 commit.
 
 | Check                                                                                           | Result                                                                                                                                                                      |
 | ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
