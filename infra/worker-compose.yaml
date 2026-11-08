@@ -22,3 +22,17 @@ containers:
     restart: on-failure
     scripts:
       run: ../../.tooling/py/bin/python src/main.py
+  web-preserve:
+    worker: path://../packages/worker-web-preserve
+    restart: on-failure
+    environment:
+      ELECTRON_RUN_AS_NODE: ""
+    scripts:
+      run: ../../node_modules/.bin/electron src/index.mjs
+  http:
+    worker: package://api.workers.iii.dev/http
+    version: "0.22.8"
+    restart: on-failure
+    config_override:
+      host: 127.0.0.1
+      port: 3111

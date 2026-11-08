@@ -77,32 +77,32 @@ Sizes are rough, for one developer, and are there to order work rather than to p
 
 ### M0: scaffold and engine
 
-- [ ] Create the repository at the agreed location; pnpm workspace, Turborepo, Biome, strict TypeScript; README with the one-command start
-- [ ] `apps/desktop`: electron-vite scaffold with context isolation and sandbox on; an empty window with the six-screen navigation shell
-- [ ] `infra/setup.sh` and `infra/engine.lock`: download the pinned iii engine by checksum into `.tooling/`; refuse to run an unpinned version
-- [ ] `infra/worker-compose.yaml`: engine bound to `127.0.0.1`, `III_TELEMETRY_ENABLED=false`, RBAC with a local auth function; entries for the main worker, `worker-parse` and `workers-py/media`
-- [ ] `packages/worker-kit`: TypeScript worker bootstrap (register, health function, structured logs, graceful stop)
-- [ ] Main process joins the engine as a worker and registers `kernel::ping` and `kernel::health`
-- [ ] `workers-py/media`: uv project with a pinned interpreter, registers `media::health` through the Python SDK
-- [ ] `packages/contracts`: Zod schemas with JSON Schema export, the health contract, and a CI check that the export is committed
-- [ ] `pnpm dev` starts compose, the engine, the workers and the app with reload; `pnpm test` runs unit tests
-- [ ] CI on a macOS Apple Silicon runner: build, lint, unit tests, Gate 0 check
-- [ ] Gate 0 script: `engine::workers::list` shows main, parse and media; the engine port is bound to loopback; telemetry is off
+- [x] Create the repository at the agreed location; pnpm workspace, Turborepo, Biome, strict TypeScript; README with the one-command start
+- [x] `apps/desktop`: electron-vite scaffold with context isolation and sandbox on; an empty window with the six-screen navigation shell
+- [x] `infra/setup.sh` and `infra/engine.lock`: download the pinned iii engine by checksum into `.tooling/`; refuse to run an unpinned version
+- [x] `infra/worker-compose.yaml`: engine bound to `127.0.0.1`, `III_TELEMETRY_ENABLED=false`, RBAC with a local auth function; entries for the main worker, `worker-parse` and `workers-py/media`
+- [x] `packages/worker-kit`: TypeScript worker bootstrap (register, health function, structured logs, graceful stop)
+- [x] Main process joins the engine as a worker and registers `kernel::ping` and `kernel::health`
+- [x] `workers-py/media`: uv project with a pinned interpreter, registers `media::health` through the Python SDK
+- [x] `packages/contracts`: Zod schemas with JSON Schema export, the health contract, and a CI check that the export is committed
+- [x] `pnpm dev` starts compose, the engine, the workers and the app with reload; `pnpm test` runs unit tests
+- [x] CI on a macOS Apple Silicon runner: build, lint, unit tests, Gate 0 check
+- [x] Gate 0 script: `engine::workers::list` shows main, parse and media; the engine port is bound to loopback; telemetry is off
 
 ### M1: capture and inbox
 
-- [ ] `packages/vault`: schema v1 (`item`, `artifact`, `capture_event`, `artifact_payload`, `job`), migration runner, single-writer connection, tests on empty and populated vaults
-- [ ] Blob store: staged write, fsync, atomic rename, content hash, deduplication by hash
-- [ ] `kernel::receipt` in the main process with CAP-3 idempotency by source id and content hash
-- [ ] Job table and stage dispatch through the engine queue; replay of open jobs on start; retries with backoff; `failed` state
-- [ ] Capture panel window: global shortcut, menu bar item, paste, drop, typed text; receipt toast; the panel closes itself
-- [ ] Drag and drop onto the main window; clipboard capture
-- [ ] Watched folder with a copy-or-move policy per folder
-- [ ] Loopback capture endpoint: registry `http` worker in compose, `capture::url`, `capture::text`, `capture::file` with a per-install secret
-- [ ] `worker-web-preserve`: offscreen sandboxed window, readable HTML, full-page screenshot, metadata; payloads committed through the core; `kernel::preserved`
-- [ ] Inbox screen: items with state chips, retry for failed stages, open original
-- [ ] Library screen with recent items; settings for vault folder, watched folders and shortcut
-- [ ] Gate 1 run: five real captures reach `preserved`; a repeated capture collapses; the window stays responsive during a large file copy
+- [x] `packages/vault`: schema v1 (`item`, `artifact`, `capture_event`, `artifact_payload`, `job`), migration runner, single-writer connection, tests on empty and populated vaults
+- [x] Blob store: staged write, fsync, atomic rename, content hash, deduplication by hash
+- [x] `kernel::receipt` in the main process with CAP-3 idempotency by source id and content hash
+- [x] Job table and stage dispatch through the engine queue; replay of open jobs on start; retries with backoff; `failed` state
+- [x] Capture panel window: global shortcut, menu bar item, paste, drop, typed text; receipt toast; the panel closes itself
+- [x] Drag and drop onto the main window; clipboard capture
+- [x] Watched folder with a copy-or-move policy per folder
+- [x] Loopback capture endpoint: registry `http` worker in compose, `capture::url`, `capture::text`, `capture::file` with a per-install secret
+- [x] `worker-web-preserve`: offscreen sandboxed window, readable HTML, full-page screenshot, metadata; payloads committed through the core; `kernel::preserved`
+- [x] Inbox screen: items with state chips, retry for failed stages, open original
+- [x] Library screen with recent items; settings for vault folder, watched folders and shortcut
+- [x] Gate 1 run: five real captures reach `preserved`; a repeated capture collapses; the window stays responsive during a large file copy
 
 ## 5. Working agreement and decisions before the first commit
 

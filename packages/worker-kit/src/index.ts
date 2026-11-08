@@ -18,7 +18,7 @@ export const log = (event: string, fields: Record<string, unknown> = {}) =>
 export function startWorker(spec: WorkerSpec) {
   const started = Date.now()
   const iii = registerWorker(ENGINE_URL, { workerName: spec.name })
-  iii.registerFunction(`${spec.name}::health`, () =>
+  iii.registerFunction(`${spec.name}::health`, async () =>
     HealthResponse.parse({
       worker: spec.name,
       version: spec.version,

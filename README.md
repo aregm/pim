@@ -10,6 +10,10 @@ What exists: the Electron shell with the screen navigation, the pinned iii engin
 
 v0.1 vaults are not encrypted (ADR-004). Nothing leaves the machine: the engine binds `127.0.0.1` and runs with telemetry off.
 
+## Milestone M1: capture and inbox
+
+What exists: the capture panel on a global shortcut (default Cmd+Shift+Space) and a menu bar item, paste, drop and clipboard capture, watched folders, a loopback capture endpoint through iii's `http` worker, the vault (SQLite through `node:sqlite`, content-addressed blobs), durable receipts with a job runner for preservation, a web-preserve worker (its own Electron process: readable HTML, full-page screenshot, metadata), and the Inbox, Library, Item and Settings screens. Gate 1 record: `docs/gates/gate-1.md`.
+
 ## Run it (macOS on Apple Silicon)
 
 ```bash
@@ -21,6 +25,13 @@ npm run gate0          # with the engine running: catalog, loopback, telemetry c
 ```
 
 `npm test` runs the unit tests, `npm run lint` runs Biome, `npm run contracts` regenerates `contracts/*.json`.
+
+## Deviations recorded in M1
+
+- SQLite through Node's built-in `node:sqlite` (FTS5 compiled in, extension loading available) instead of better-sqlite3: same engine, no native rebuild against Electron. Spec D4 names the library; the decision, one SQLite database with derived tables, is unchanged.
+- The job table is the queue and the core calls stage functions directly with retries and backoff; the engine's queue worker is not added until a stage needs fan-out.
+- The capture endpoint secret sits in `settings.json` in v0.1 (spec D13 defers the Keychain).
+- The http worker's host is set through `configuration::set` after the first boot; `config_override` alone did not change a running worker.
 
 ## Deviations from the plan recorded in M0
 
