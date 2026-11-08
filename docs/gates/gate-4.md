@@ -22,3 +22,5 @@ The first graph view drew nodes as overlapping discs: Sigma 4 reads `size` in po
 
 Verified over the DevTools protocol on an isolated copy of the vault (screenshots in the session scratchpad): the Wikipedia focus renders as 22 nodes and 98 edges with readable labels; clicking the focus node lists 16 connections and 15 cited passages; selecting an edge shows the five facts and its 8 passages; clicking a passage opens the item with that fragment selected. Not verified by automation: drag to pin and double-click to refocus on the canvas.
 
+Same day, item viewers: every fetch of a `pim-blob://` URL failed with "Failed to fetch", so the HTML, text and PDF viewers stayed on "loading…" (images and media elements loaded, as they do not use fetch). The scheme was never registered as privileged; it now is, with `supportFetchAPI` and `corsEnabled`, and blob responses carry `access-control-allow-origin`. Verified over the DevTools protocol: the Wikipedia page renders in its frame, a PDF page on its canvas, a text file in its block, and a video with its duration.
+

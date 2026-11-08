@@ -131,6 +131,23 @@ async function captureClipboard() {
 const secretOk = (headers: Record<string, string>) =>
   headers['x-pim-secret'] === settings.captureSecret
 
+// The renderer's origin (file or the dev server) differs from the blob scheme's, so every fetch is cross-origin.
+const CORS = { 'access-control-allow-origin': '*' }
+// pim-blob://<hex>/ must be a standard, secure scheme that fetch() and media elements may load; this has to be
+// declared before the app is ready, or every fetch of a blob fails.
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'pim-blob',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+      stream: true,
+    },
+  },
+])
+
 app.whenReady().then(() => {
   core = new Core(settings.vaultDir, iii)
   core.on('changed', broadcast)
@@ -143,11 +160,11 @@ app.whenReady().then(() => {
       .prepare('SELECT mime FROM artifact_payload WHERE blob_id = ? LIMIT 1')
       .get(blobId) as { mime: string } | undefined
     if (!/^[0-9a-f]{64}$/.test(hex) || !payload || !core.vault.blobs.has(blobId))
-      return new Response('not found', { status: 404 })
+      return new Response('not found', { status: 404, headers: CORS })
     const stream = Readable.toWeb(
       createReadStream(core.vault.blobs.pathFor(blobId)),
     ) as ReadableStream
-    return new Response(stream, { headers: { 'content-type': payload.mime } })
+    return new Response(stream, { headers: { ...CORS, 'content-type': payload.mime } })
   })
   watcher.apply(settings.watchedFolders)
 
