@@ -14,7 +14,9 @@
     "iii-sdk": "0.25.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
-    "@pim/vault": "0.1.0"
+    "@pim/vault": "0.1.0",
+    "pdfjs-dist": "6.5.438",
+    "@pim/blocks": "0.1.0"
   },
   "devDependencies": {
     "@types/react": "19.3.0",

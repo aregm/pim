@@ -46,6 +46,46 @@ export const WebPreserveResult = z.object({
 })
 export type WebPreserveResult = z.infer<typeof WebPreserveResult>
 
+/** What the core hands `extract::text` (the parse worker) for one payload. */
+export const ExtractRequest = z.object({
+  artifact_id: z.string(),
+  payload_id: z.string(),
+  mime: z.string(),
+  path: z.string(),
+})
+export type ExtractRequest = z.infer<typeof ExtractRequest>
+
+export const Selector = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('block'), index: z.number().int().nonnegative() }),
+  z.object({
+    kind: z.literal('page'),
+    page: z.number().int().positive(),
+    start: z.number().int().nonnegative(),
+    end: z.number().int().nonnegative(),
+    bbox: z.tuple([z.number(), z.number(), z.number(), z.number()]).optional(),
+  }),
+  z.object({
+    kind: z.literal('char'),
+    start: z.number().int().nonnegative(),
+    end: z.number().int().nonnegative(),
+  }),
+])
+export type Selector = z.infer<typeof Selector>
+
+export const Extraction = z.object({
+  fragments: z.array(
+    z.object({ ordinal: z.number().int().nonnegative(), selector: Selector, text: z.string() }),
+  ),
+  normalized_text: z.string().optional(),
+  pages: z.number().int().nonnegative().optional(),
+})
+export type Extraction = z.infer<typeof Extraction>
+
+export const SearchRequest = z.object({
+  query: z.string(),
+  limit: z.number().int().positive().max(200).optional(),
+})
+
 /** Every contract that is exported to `contracts/*.json` for the Python worker. */
 export const exported = {
   health: HealthResponse,
@@ -53,6 +93,8 @@ export const exported = {
   capture_request: CaptureRequest,
   receipt: Receipt,
   web_preserve_result: WebPreserveResult,
+  extract_request: ExtractRequest,
+  extraction: Extraction,
 } as const
 
 export const toJsonSchema = (schema: z.ZodType) =>

@@ -3,7 +3,7 @@ import { registerWorker } from 'iii-sdk'
 
 export const ENGINE_URL = process.env.III_URL ?? 'ws://127.0.0.1:49140'
 
-type Handler = (input: unknown) => Promise<unknown> | unknown
+type Handler = (input: unknown) => Promise<unknown>
 
 export interface WorkerSpec {
   name: string

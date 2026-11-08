@@ -7,6 +7,13 @@
     "start": "node src/index.ts"
   },
   "dependencies": {
-    "@pim/worker-kit": "0.1.0"
+    "@pim/blocks": "0.1.0",
+    "@pim/worker-kit": "0.1.0",
+    "linkedom": "0.18.15",
+    "mailparser": "3.14.1",
+    "pdfjs-dist": "6.5.438"
+  },
+  "devDependencies": {
+    "@types/mailparser": "3.4.6"
   }
 }

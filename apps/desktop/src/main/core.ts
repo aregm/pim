@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { statSync, unlinkSync } from 'node:fs'
 import { basename, extname } from 'node:path'
-import { type CaptureRequest, type Receipt, WebPreserveResult } from '@pim/contracts'
+import { type CaptureRequest, Extraction, type Receipt, WebPreserveResult } from '@pim/contracts'
 import { type ItemRow, type JobRow, Vault } from '@pim/vault'
 import type { IIIClient } from 'iii-sdk'
 
@@ -146,8 +146,14 @@ export class Core extends EventEmitter {
   }
 
   start() {
+    const added = this.vault.backfill('extract')
+    if (added) console.log(JSON.stringify({ event: 'jobs.backfill', stage: 'extract', added }))
     this.timer = setInterval(() => void this.tick(), 1000)
     void this.tick()
+  }
+
+  search(query: string, limit?: number) {
+    return this.vault.search(query, limit)
   }
 
   stop() {
@@ -157,7 +163,7 @@ export class Core extends EventEmitter {
 
   private async tick() {
     while (this.running < 2) {
-      const job = this.vault.claimJob('preserve')
+      const job = this.vault.claimJob('preserve') ?? this.vault.claimJob('extract')
       if (!job) return
       this.running++
       void this.run(job).finally(() => {
@@ -173,9 +179,12 @@ export class Core extends EventEmitter {
       return
     }
     try {
-      if (item.source_kind === 'file') await this.preserveFile(item)
+      if (job.stage === 'extract') await this.extract(item)
+      else if (item.source_kind === 'file') await this.preserveFile(item)
       else if (item.source_kind === 'url') await this.preserveUrl(item)
       this.vault.completeJob(job.id)
+      if (job.stage === 'preserve' && this.vault.item(item.id)?.state === 'preserved')
+        this.vault.enqueue(item.id, 'extract')
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
       const state = this.vault.failJob(job.id, message)
@@ -238,5 +247,48 @@ export class Core extends EventEmitter {
     this.vault.markPreserved(item.id, raw.blob_id, result.title || undefined)
     if (result.title)
       this.vault.db.prepare('UPDATE item SET title = ? WHERE id = ?').run(result.title, item.id)
+  }
+
+  /** PRS-1: fragments from the payload the viewer shows; a re-run replaces, never duplicates. */
+  private async extract(item: ItemRow) {
+    if (item.source_kind === 'image') return
+    const payloads = this.vault.payloads(item.id)
+    const source =
+      payloads.find((p) => p.role === 'normalized' && p.mime === 'text/html') ??
+      payloads.find((p) => p.role === 'raw')
+    if (!source) throw new Error('no payload to extract from')
+    const run = this.vault.startRun(item.id, 'extract::text', '0.2.0')
+    try {
+      const result = Extraction.parse(
+        await this.iii.trigger({
+          function_id: 'extract::text',
+          payload: {
+            artifact_id: item.id,
+            payload_id: source.id,
+            mime: source.mime,
+            path: this.vault.blobs.pathFor(source.blob_id),
+          },
+          timeoutMs: 120_000,
+        }),
+      )
+      let target = source
+      if (result.normalized_text !== undefined) {
+        const stored = await this.vault.blobs.putBuffer(Buffer.from(result.normalized_text, 'utf8'))
+        target =
+          payloads.find((p) => p.role === 'normalized' && p.mime === 'text/plain') ??
+          this.vault.addPayload(
+            item.id,
+            'normalized',
+            stored.blob_id,
+            'text/plain',
+            stored.byte_length,
+          )
+      }
+      this.vault.replaceFragments(item.id, target.id, run, 'extract::text', result.fragments)
+      this.vault.finishRun(run)
+    } catch (e) {
+      this.vault.finishRun(run, e instanceof Error ? e.message : String(e))
+      throw e
+    }
   }
 }

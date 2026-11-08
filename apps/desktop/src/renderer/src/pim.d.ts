@@ -23,6 +23,33 @@ export interface PayloadView {
   mime: string
   byte_length: number
 }
+export type Selector =
+  | { kind: 'block'; index: number }
+  | {
+      kind: 'page'
+      page: number
+      start: number
+      end: number
+      bbox?: [number, number, number, number] | undefined
+    }
+  | { kind: 'char'; start: number; end: number }
+export interface FragmentView {
+  id: string
+  payload_id: string
+  ordinal: number
+  selector: Selector
+  text: string
+}
+export interface SearchHit {
+  item_id: string
+  title: string | null
+  source_kind: 'url' | 'text' | 'file' | 'image'
+  state: 'received' | 'preserved' | 'failed' | 'duplicate'
+  score: number
+  snippet: string
+  fragment_id: string | null
+  last_captured_at: string
+}
 export interface WatchedFolder {
   path: string
   policy: 'copy' | 'move'
@@ -43,6 +70,9 @@ declare global {
       pathForFile: (file: File) => string
       items: () => Promise<ItemView[]>
       payloads: (id: string) => Promise<PayloadView[]>
+      fragments: (id: string) => Promise<FragmentView[]>
+      search: (query: string) => Promise<SearchHit[]>
+      blobUrl: (blobId: string) => string
       retry: (id: string) => Promise<void>
       openSource: (id: string) => Promise<void>
       settings: () => Promise<SettingsView>

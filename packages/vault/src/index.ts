@@ -58,6 +58,44 @@ export interface PayloadRow {
   created_at: string
 }
 
+export type Selector =
+  | { kind: 'block'; index: number }
+  | {
+      kind: 'page'
+      page: number
+      start: number
+      end: number
+      bbox?: [number, number, number, number] | undefined
+    }
+  | { kind: 'char'; start: number; end: number }
+
+export interface FragmentInput {
+  ordinal: number
+  selector: Selector
+  text: string
+}
+
+export interface FragmentRow {
+  id: string
+  artifact_id: string
+  payload_id: string
+  run_id: string
+  ordinal: number
+  selector: Selector
+  text: string
+}
+
+export interface SearchHit {
+  item_id: string
+  title: string | null
+  source_kind: SourceKind
+  state: ArtifactState
+  score: number
+  snippet: string
+  fragment_id: string | null
+  last_captured_at: string
+}
+
 export interface JobRow {
   id: string
   artifact_id: string
@@ -310,11 +348,140 @@ export class Vault {
       .run(artifactId)
   }
 
+  // ---- processing runs and fragments (MET-1, PRS-1) ----
+
+  startRun(artifactId: string, processor: string, version: string): string {
+    const id = uuidv7()
+    this.db
+      .prepare(
+        'INSERT INTO processing_run (id, artifact_id, processor, version, status, started_at) VALUES (?, ?, ?, ?, ?, ?)',
+      )
+      .run(id, artifactId, processor, version, 'running', now())
+    return id
+  }
+
+  finishRun(id: string, error?: string) {
+    this.db
+      .prepare('UPDATE processing_run SET status = ?, finished_at = ?, error = ? WHERE id = ?')
+      .run(error ? 'failed' : 'done', now(), error ?? null, id)
+  }
+
+  /** Replaces the fragments one processor derived from one payload; a re-run never duplicates. */
+  replaceFragments(
+    artifactId: string,
+    payloadId: string,
+    runId: string,
+    processor: string,
+    fragments: FragmentInput[],
+  ) {
+    const t = now()
+    this.db.exec('BEGIN')
+    try {
+      this.db
+        .prepare(
+          'DELETE FROM fragment WHERE payload_id = ? AND run_id IN (SELECT id FROM processing_run WHERE processor = ?)',
+        )
+        .run(payloadId, processor)
+      const insert = this.db.prepare(
+        'INSERT INTO fragment (id, artifact_id, payload_id, run_id, ordinal, selector_json, text, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      for (const f of fragments)
+        insert.run(
+          uuidv7(),
+          artifactId,
+          payloadId,
+          runId,
+          f.ordinal,
+          JSON.stringify(f.selector),
+          f.text,
+          t,
+        )
+      this.db.exec('COMMIT')
+    } catch (e) {
+      this.db.exec('ROLLBACK')
+      throw e
+    }
+  }
+
+  fragments(artifactId: string): FragmentRow[] {
+    const rows = this.db
+      .prepare(
+        'SELECT id, artifact_id, payload_id, run_id, ordinal, selector_json, text FROM fragment WHERE artifact_id = ? ORDER BY ordinal',
+      )
+      .all(artifactId) as unknown as (Omit<FragmentRow, 'selector'> & { selector_json: string })[]
+    return rows.map(({ selector_json, ...r }) => ({
+      ...r,
+      selector: JSON.parse(selector_json) as Selector,
+    }))
+  }
+
+  /** Lexical search over fragment text and titles, best fragment per item, BM25 order (RET-1). */
+  search(query: string, limit = 50): SearchHit[] {
+    const q = toFtsQuery(query)
+    if (!q) return []
+    return this.db
+      .prepare(
+        `WITH hits AS (
+           SELECT f.artifact_id AS item_id, f.id AS fragment_id, bm25(fragment_fts) AS score,
+                  snippet(fragment_fts, 0, '[', ']', '…', 12) AS snippet
+           FROM fragment_fts JOIN fragment f ON f.rowid = fragment_fts.rowid
+           WHERE fragment_fts MATCH ?
+           UNION ALL
+           SELECT i.id, NULL, bm25(item_fts) - 1.0, snippet(item_fts, 0, '[', ']', '…', 12)
+           FROM item_fts JOIN item i ON i.rowid = item_fts.rowid
+           WHERE item_fts MATCH ?
+         ),
+         best AS (SELECT item_id, fragment_id, score, snippet, ROW_NUMBER() OVER (PARTITION BY item_id ORDER BY score) AS rn FROM hits)
+         SELECT b.item_id, i.title, a.source_kind, a.state, b.score, b.snippet, b.fragment_id,
+                (SELECT MAX(at) FROM capture_event c WHERE c.artifact_id = a.item_id) AS last_captured_at
+         FROM best b JOIN item i ON i.id = b.item_id JOIN artifact a ON a.item_id = i.id
+         WHERE b.rn = 1 AND i.deleted_at IS NULL AND a.state != 'duplicate'
+         ORDER BY b.score LIMIT ?`,
+      )
+      .all(q, q, limit) as unknown as SearchHit[]
+  }
+
+  /** Adds a stage job for an artifact unless one exists (any state). */
+  enqueue(artifactId: string, stage: string): boolean {
+    const t = now()
+    const r = this.db
+      .prepare(
+        'INSERT OR IGNORE INTO job (id, artifact_id, stage, state, attempts, next_run_at, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?, ?)',
+      )
+      .run(uuidv7(), artifactId, stage, 'open', t, t, t)
+    return r.changes > 0
+  }
+
+  /** Gives every preserved artifact that never had `stage` a job for it; how an upgrade catches up. */
+  backfill(stage: string): number {
+    const rows = this.db
+      .prepare(
+        "SELECT a.item_id FROM artifact a WHERE a.state = 'preserved' AND NOT EXISTS (SELECT 1 FROM job j WHERE j.artifact_id = a.item_id AND j.stage = ?)",
+      )
+      .all(stage) as unknown as { item_id: string }[]
+    for (const r of rows) this.enqueue(r.item_id, stage)
+    return rows.length
+  }
+
   jobs(artifactId: string): JobRow[] {
     return this.db
       .prepare('SELECT * FROM job WHERE artifact_id = ? ORDER BY created_at')
       .all(artifactId) as unknown as JobRow[]
   }
+}
+
+/** Turns what the person typed into a safe FTS5 query: each word a prefix term, quotes kept as phrases. */
+export function toFtsQuery(input: string): string {
+  const phrases = [...input.matchAll(/"([^"]+)"/g)].map(
+    (m) => `"${(m[1] ?? '').replace(/"/g, '')}"`,
+  )
+  const rest = input.replace(/"[^"]*"?/g, ' ')
+  const words = rest
+    .split(/\s+/)
+    .map((w) => w.replace(/[^\p{L}\p{N}_]/gu, ''))
+    .filter((w) => w.length > 0)
+    .map((w) => `"${w}"*`)
+  return [...phrases, ...words].join(' ')
 }
 
 export const openVault = (dir: string) => new Vault(dir)

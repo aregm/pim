@@ -1,5 +1,13 @@
+import { createReadStream } from 'node:fs'
 import { join } from 'node:path'
-import { CaptureRequest, EngineWorkersList, HealthResponse, PingResponse } from '@pim/contracts'
+import { Readable } from 'node:stream'
+import {
+  CaptureRequest,
+  EngineWorkersList,
+  HealthResponse,
+  PingResponse,
+  SearchRequest,
+} from '@pim/contracts'
 import {
   app,
   BrowserWindow,
@@ -8,6 +16,7 @@ import {
   ipcMain,
   Menu,
   nativeImage,
+  protocol,
   shell,
   Tray,
 } from 'electron'
@@ -123,6 +132,20 @@ app.whenReady().then(() => {
   core = new Core(settings.vaultDir, iii)
   core.on('changed', broadcast)
   core.start()
+  protocol.handle('pim-blob', (request: Request) => {
+    // pim-blob://<hex>/ : the hex is the host of a standard-scheme URL, so it arrives lower-cased
+    const hex = new URL(request.url).host.toLowerCase()
+    const blobId = `sha256:${hex}`
+    const payload = core.vault.db
+      .prepare('SELECT mime FROM artifact_payload WHERE blob_id = ? LIMIT 1')
+      .get(blobId) as { mime: string } | undefined
+    if (!/^[0-9a-f]{64}$/.test(hex) || !payload || !core.vault.blobs.has(blobId))
+      return new Response('not found', { status: 404 })
+    const stream = Readable.toWeb(
+      createReadStream(core.vault.blobs.pathFor(blobId)),
+    ) as ReadableStream
+    return new Response(stream, { headers: { 'content-type': payload.mime } })
+  })
   watcher.apply(settings.watchedFolders)
 
   // ---- functions on the engine ----
@@ -140,6 +163,10 @@ app.whenReady().then(() => {
   iii.registerFunction('kernel::receipt', (input: unknown) =>
     core.receive(CaptureRequest.parse(input), 'api'),
   )
+  iii.registerFunction('kernel::search', async (input: unknown) => {
+    const { query, limit } = SearchRequest.parse(input)
+    return { hits: core.search(query, limit) }
+  })
   // CAP-4: loopback endpoint through iii's http worker; the secret is checked here, not in the worker.
   iii.registerFunction(
     'capture::http',
@@ -167,6 +194,8 @@ app.whenReady().then(() => {
   ipcMain.handle('capture:clipboard', () => captureClipboard())
   ipcMain.handle('items:list', () => core.items())
   ipcMain.handle('items:payloads', (_e, id: string) => core.vault.payloads(id))
+  ipcMain.handle('items:fragments', (_e, id: string) => core.vault.fragments(id))
+  ipcMain.handle('items:search', (_e, query: string) => core.search(String(query), 50))
   ipcMain.handle('items:retry', (_e, id: string) => core.retry(id))
   ipcMain.handle('source:open', async (_e, id: string) => {
     const item = core.vault.item(id)
