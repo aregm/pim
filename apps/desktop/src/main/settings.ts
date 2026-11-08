@@ -18,6 +18,11 @@ export interface Settings {
   captureSecret: string
   /** Ollama model names for embeddings, extraction and captions (D6). */
   models: ModelSettings
+  /** A Python environment with the media worker's requirements (`infra/setup.sh` makes `.tooling/py`); null disables audio and OCR. */
+  pythonRuntime: string | null
+  /** False until the first-run screen was completed (UI-7); an install that predates the screen counts as done. */
+  firstRunDone: boolean
+  lastBackup: { at: string; dir: string } | null
 }
 
 const file = () => join(app.getPath('userData'), 'settings.json')
@@ -29,13 +34,21 @@ export function loadSettings(): Settings {
     watchedFolders: [],
     captureSecret: randomBytes(24).toString('hex'),
     models: { ...DEFAULT_MODELS },
+    pythonRuntime: null,
+    firstRunDone: false,
+    lastBackup: null,
   }
   if (!existsSync(file())) {
     saveSettings(defaults)
     return defaults
   }
   const stored = JSON.parse(readFileSync(file(), 'utf8')) as Partial<Settings>
-  return { ...defaults, ...stored, models: { ...defaults.models, ...(stored.models ?? {}) } }
+  return {
+    ...defaults,
+    firstRunDone: true,
+    ...stored,
+    models: { ...defaults.models, ...(stored.models ?? {}) },
+  }
 }
 
 export function saveSettings(s: Settings) {

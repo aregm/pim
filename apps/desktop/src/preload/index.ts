@@ -28,6 +28,16 @@ contextBridge.exposeInMainWorld('pim', {
   settings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (patch: unknown) => ipcRenderer.invoke('settings:set', patch),
   engineWorkers: (): Promise<string[]> => ipcRenderer.invoke('engine:workers'),
+  exportItems: (ids: string[] | null, dir?: string) => ipcRenderer.invoke('export:run', ids, dir),
+  importPackage: (dir?: string) => ipcRenderer.invoke('import:run', dir),
+  backup: (dest?: string) => ipcRenderer.invoke('backup:run', dest),
+  testRestore: (backupDir?: string) => ipcRenderer.invoke('backup:test', backupDir),
+  restore: (backupDir?: string, target?: string) =>
+    ipcRenderer.invoke('backup:restore', backupDir, target),
+  switchVault: (dir?: string) => ipcRenderer.invoke('vault:switch', dir),
+  runtimeStatus: () => ipcRenderer.invoke('runtime:status'),
+  firstRunDone: () => ipcRenderer.invoke('firstrun:done'),
+  reveal: (path: string) => ipcRenderer.invoke('shell:reveal', path),
   onItemsChanged: (cb: () => void) => {
     const listener = () => cb()
     ipcRenderer.on('items:changed', listener)

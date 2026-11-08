@@ -165,6 +165,45 @@ export interface SettingsView {
   captureSecret: string
   endpoint: string
   models: ModelSettings
+  pythonRuntime: string | null
+  firstRunDone: boolean
+  lastBackup: { at: string; dir: string } | null
+}
+export interface ExportReport {
+  dir: string
+  items: number
+  blobs: number
+  bytes: number
+}
+export interface ImportReport {
+  items: number
+  existing: number
+  conflicts: string[]
+  blobs: number
+  entities: number
+  relations: number
+}
+export interface BackupManifest {
+  created_at: string
+  app_version: string
+  schema_version: number
+  items: number
+  blobs: number
+  bytes: number
+}
+export interface VerifyReport {
+  ok: boolean
+  items: number
+  payloads: number
+  missing_blobs: string[]
+  search: { query: string; found: boolean } | null
+  schema_version: number
+}
+export interface RuntimeStatus {
+  engine: { url: string; reachable: boolean; bundled: boolean; workers: string[] }
+  python: { path: string | null; present: boolean }
+  models: ModelsStatus
+  firstRunStartedAt: string | null
 }
 
 declare global {
@@ -194,6 +233,25 @@ declare global {
       settings: () => Promise<SettingsView>
       saveSettings: (patch: Partial<SettingsView>) => Promise<SettingsView>
       engineWorkers: () => Promise<string[]>
+      exportItems: (ids: string[] | null, dir?: string) => Promise<ExportReport | null>
+      importPackage: (dir?: string) => Promise<ImportReport | null>
+      backup: (dest?: string) => Promise<{ dir: string; manifest: BackupManifest } | null>
+      testRestore: (
+        backupDir?: string,
+      ) => Promise<{ manifest: BackupManifest; report: VerifyReport } | null>
+      restore: (
+        backupDir?: string,
+        target?: string,
+      ) => Promise<{
+        target: string
+        manifest: BackupManifest
+        report: VerifyReport
+        switched: boolean
+      } | null>
+      switchVault: (dir?: string) => Promise<SettingsView | null>
+      runtimeStatus: () => Promise<RuntimeStatus>
+      firstRunDone: () => Promise<SettingsView>
+      reveal: (path: string) => Promise<void>
       onItemsChanged: (cb: () => void) => () => void
       closePanel: () => void
       showMain: () => void

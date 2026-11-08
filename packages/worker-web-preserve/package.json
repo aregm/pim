@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "main": "src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./preserve": "./src/preserve.mjs"
+  },
   "scripts": {
     "start": "electron src/index.mjs"
   },

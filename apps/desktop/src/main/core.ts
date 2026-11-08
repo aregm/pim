@@ -78,7 +78,10 @@ const sha256 = (b: Uint8Array) => `sha256:${createHash('sha256').update(b).diges
 export class Core extends EventEmitter {
   readonly vault: Vault
   private timer: NodeJS.Timeout | undefined
+  private modelsTimer: NodeJS.Timeout | undefined
   private running = 0
+  /** Model stages run one at a time so a slot stays free for the quick, deterministic stages (UI-2). */
+  private enriching = 0
   models: ModelSettings = { ...DEFAULT_MODELS }
   private modelsSeen: { at: number; status: ModelsStatus } | null = null
   /** Originals to delete after a `move` capture from a watched folder. */
@@ -202,7 +205,7 @@ export class Core extends EventEmitter {
     }
     this.timer = setInterval(() => void this.tick(), 1000)
     // Skipped enrichment wakes when Ollama appears; the check is cheap and local.
-    setInterval(() => void this.modelsStatus(true), 60_000)
+    this.modelsTimer = setInterval(() => void this.modelsStatus(true), 60_000)
     void this.modelsStatus(true)
     void this.tick()
   }
@@ -574,22 +577,31 @@ export class Core extends EventEmitter {
     this.vault.putEntityVectors(digest, out.dim, rows)
   }
 
-  stop() {
+  /** Stops claiming jobs, waits for the running ones (bounded), then closes the vault. */
+  async stop(waitMs = 30_000) {
     if (this.timer) clearInterval(this.timer)
+    if (this.modelsTimer) clearInterval(this.modelsTimer)
+    this.timer = undefined
+    const until = Date.now() + waitMs
+    while (this.running > 0 && Date.now() < until) await new Promise((r) => setTimeout(r, 200))
     this.vault.close()
   }
 
   private async tick() {
+    if (!this.timer) return
     while (this.running < 2) {
+      // Deterministic links come before enrichment: a link never waits on a model (spec 7, rehearsal).
       const job =
         this.vault.claimJob('preserve') ??
         this.vault.claimJob('extract') ??
-        this.vault.claimJob('enrich') ??
-        this.vault.claimJob('link')
+        this.vault.claimJob('link') ??
+        (this.enriching === 0 ? this.vault.claimJob('enrich') : undefined)
       if (!job) return
       this.running++
+      if (job.stage === 'enrich') this.enriching++
       void this.run(job).finally(() => {
         this.running--
+        if (job.stage === 'enrich') this.enriching--
       })
     }
   }
@@ -611,7 +623,11 @@ export class Core extends EventEmitter {
       this.vault.completeJob(job.id, note)
       if (job.stage === 'preserve' && this.vault.item(item.id)?.state === 'preserved')
         this.vault.enqueue(item.id, 'extract')
-      if (job.stage === 'extract') this.vault.requeue(item.id, 'enrich')
+      // links run twice: right after extraction on what is deterministic, and again once models have added to it
+      if (job.stage === 'extract') {
+        this.vault.requeue(item.id, 'link')
+        this.vault.requeue(item.id, 'enrich')
+      }
       if (job.stage === 'enrich') this.vault.requeue(item.id, 'link')
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)

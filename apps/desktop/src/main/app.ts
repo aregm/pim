@@ -1,0 +1,514 @@
+import type { ChildProcess } from 'node:child_process'
+import { createReadStream, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { Readable } from 'node:stream'
+import {
+  CaptureRequest,
+  EngineWorkersList,
+  HealthResponse,
+  NeighbourhoodRequest,
+  PingResponse,
+  ReviewRequest,
+  SearchRequest,
+  TagRequest,
+} from '@pim/contracts'
+import { backupVault, exportItems, importPackage, restoreVault, verifyVault } from '@pim/vault'
+import {
+  app,
+  BrowserWindow,
+  clipboard,
+  dialog,
+  globalShortcut,
+  ipcMain,
+  Menu,
+  nativeImage,
+  protocol,
+  shell,
+  Tray,
+} from 'electron'
+import { type IIIClient, registerWorker } from 'iii-sdk'
+import { Core } from './core.ts'
+import {
+  engineListening,
+  pythonPresent,
+  quote,
+  type RuntimeLayout,
+  runtimeDir,
+  startEngine,
+  waitForEngine,
+} from './engine.ts'
+import { loadSettings, type Settings, saveSettings } from './settings.ts'
+import { FolderWatcher } from './watch.ts'
+
+const VERSION = '0.1.0'
+const ENGINE_URL = process.env.III_URL ?? 'ws://127.0.0.1:49140'
+const started = Date.now()
+
+// The main process is the trusted core and one worker on the engine (spec D3, ADR-001), in the `pim` namespace.
+// A second instance on this machine (another vault, a gate run) sets PIM_WORKER_NAME: it registers under its own
+// name and leaves the engine's kernel functions and the capture endpoint to the primary instance.
+const WORKER_NAME = process.env.PIM_WORKER_NAME ?? 'desktop'
+const PRIMARY = WORKER_NAME === 'desktop'
+let iii: IIIClient
+let settings: Settings = loadSettings()
+let core: Core
+let engineProcess: ChildProcess | undefined
+/** UI-7: measured from the app's start on a fresh install until the first item is extracted and searchable. */
+const firstRunStarted = Date.now()
+let firstItemLogged = false
+const stamp = () => new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+let mainWindow: BrowserWindow | undefined
+let panel: BrowserWindow | undefined
+let tray: Tray | undefined
+const watcher = new FolderWatcher((path, folder) => {
+  void core.receive({ kind: 'file', path }, 'folder', { moveOriginal: folder.policy === 'move' })
+})
+
+const rendererUrl = (hash: string) =>
+  process.env.ELECTRON_RENDERER_URL ? `${process.env.ELECTRON_RENDERER_URL}#${hash}` : undefined
+
+const load = (win: BrowserWindow, hash: string) => {
+  const url = rendererUrl(hash)
+  if (url) void win.loadURL(url)
+  else void win.loadFile(join(import.meta.dirname, '../renderer/index.html'), { hash })
+}
+
+const webPreferences = () => ({
+  preload: join(import.meta.dirname, '../preload/index.cjs'),
+  sandbox: true,
+  contextIsolation: true,
+})
+
+function showMain() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.show()
+    mainWindow.focus()
+    return
+  }
+  mainWindow = new BrowserWindow({
+    width: 1100,
+    height: 720,
+    title: 'PIM',
+    webPreferences: webPreferences(),
+  })
+  load(mainWindow, '/inbox')
+  mainWindow.on('closed', () => {
+    mainWindow = undefined
+  })
+}
+
+/** UI-1: one keystroke opens the panel; it closes itself after the receipt. */
+function togglePanel() {
+  if (panel && !panel.isDestroyed()) {
+    if (panel.isVisible()) panel.hide()
+    else {
+      panel.show()
+      panel.focus()
+    }
+    return
+  }
+  panel = new BrowserWindow({
+    width: 520,
+    height: 300,
+    frame: false,
+    resizable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    title: 'Capture',
+    webPreferences: webPreferences(),
+  })
+  load(panel, '/capture')
+  panel.on('blur', () => panel?.hide())
+  panel.on('closed', () => {
+    panel = undefined
+  })
+}
+
+function registerShortcut() {
+  globalShortcut.unregisterAll()
+  if (!globalShortcut.register(settings.shortcut, togglePanel))
+    console.error(JSON.stringify({ event: 'shortcut.unavailable', shortcut: settings.shortcut }))
+}
+
+function broadcast() {
+  if (!settings.firstRunDone && !firstItemLogged) {
+    const ready = core.vault.db
+      .prepare("SELECT 1 FROM job WHERE stage = 'extract' AND state = 'done' LIMIT 1")
+      .get()
+    if (ready) {
+      firstItemLogged = true
+      console.log(
+        JSON.stringify({ event: 'first_run.first_item', ms: Date.now() - firstRunStarted }),
+      )
+    }
+  }
+  for (const w of BrowserWindow.getAllWindows()) w.webContents.send('items:changed')
+}
+
+/** The packaged app starts its bundled engine when nothing listens at the engine URL. */
+async function bootEngine() {
+  const dir = runtimeDir(process.resourcesPath, app.isPackaged)
+  if (!dir || (await engineListening(ENGINE_URL))) return
+  const layout: RuntimeLayout = {
+    dir,
+    stateDir: join(app.getPath('userData'), 'engine'),
+    modelsDir: join(app.getPath('userData'), 'models'),
+    engineUrl: ENGINE_URL,
+    node: quote(process.execPath),
+    app: app.isPackaged
+      ? quote(process.execPath)
+      : `${quote(process.execPath)} ${quote(join(import.meta.dirname, 'index.js'))}`,
+    pythonRuntime: settings.pythonRuntime,
+    ollamaUrl: 'http://127.0.0.1:11434',
+  }
+  engineProcess = startEngine(layout, (line) =>
+    console.log(JSON.stringify({ event: 'engine.log', line })),
+  )
+  const up = await waitForEngine(ENGINE_URL, 30_000)
+  console.log(JSON.stringify({ event: 'engine.bundled', up, dir, state: layout.stateDir }))
+}
+
+function startCore(dir: string) {
+  core = new Core(dir, iii)
+  core.models = settings.models
+  core.on('changed', broadcast)
+  core.start()
+}
+
+/** Switches to another vault folder in place: the running core drains, the new one opens (spec Settings). */
+async function openVault(dir: string) {
+  await core.stop()
+  startCore(dir)
+  settings = { ...settings, vaultDir: dir }
+  saveSettings(settings)
+  broadcast()
+}
+
+const pickFolder = async (title: string, defaultPath?: string) => {
+  const r = await dialog.showOpenDialog({
+    title,
+    properties: ['openDirectory', 'createDirectory'],
+    ...(defaultPath ? { defaultPath } : {}),
+  })
+  return r.canceled ? undefined : r.filePaths[0]
+}
+
+async function workers(): Promise<string[]> {
+  const result = await iii.trigger({
+    function_id: 'engine::workers::list',
+    payload: {},
+    timeoutMs: 5_000,
+  })
+  return EngineWorkersList.parse(result).workers.map((w) => w.name)
+}
+
+async function captureClipboard() {
+  // Electron 45 clipboard: items with MIME types, blobs for binary data.
+  for (const item of await clipboard.read()) {
+    const type = item.types.find((t) => t === 'image/png')
+    if (type) {
+      const blob = (await item.getType(type)) as Blob
+      return core.receiveImage(new Uint8Array(await blob.arrayBuffer()), 'clipboard')
+    }
+  }
+  const text = (await clipboard.readText()).trim()
+  if (!text) throw new Error('clipboard is empty')
+  if (/^https?:\/\/\S+$/.test(text)) return core.receive({ kind: 'url', url: text }, 'clipboard')
+  return core.receive({ kind: 'text', text }, 'clipboard')
+}
+
+const secretOk = (headers: Record<string, string>) =>
+  headers['x-pim-secret'] === settings.captureSecret
+
+// The renderer's origin (file or the dev server) differs from the blob scheme's, so every fetch is cross-origin.
+const CORS = { 'access-control-allow-origin': '*' }
+// pim-blob://<hex>/ must be a standard, secure scheme that fetch() and media elements may load; this has to be
+// declared before the app is ready, or every fetch of a blob fails.
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'pim-blob',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+      stream: true,
+    },
+  },
+])
+
+app.whenReady().then(async () => {
+  await bootEngine()
+  iii = registerWorker(ENGINE_URL, { workerName: WORKER_NAME, namespace: 'pim' })
+  console.log(
+    JSON.stringify({
+      event: 'app.start',
+      worker: WORKER_NAME,
+      primary: PRIMARY,
+      first_run: !settings.firstRunDone,
+    }),
+  )
+  startCore(settings.vaultDir)
+  protocol.handle('pim-blob', (request: Request) => {
+    // pim-blob://<hex>/ : the hex is the host of a standard-scheme URL, so it arrives lower-cased
+    const hex = new URL(request.url).host.toLowerCase()
+    const blobId = `sha256:${hex}`
+    const payload = core.vault.db
+      .prepare('SELECT mime FROM artifact_payload WHERE blob_id = ? LIMIT 1')
+      .get(blobId) as { mime: string } | undefined
+    if (!/^[0-9a-f]{64}$/.test(hex) || !payload || !core.vault.blobs.has(blobId))
+      return new Response('not found', { status: 404, headers: CORS })
+    const stream = Readable.toWeb(
+      createReadStream(core.vault.blobs.pathFor(blobId)),
+    ) as ReadableStream
+    return new Response(stream, { headers: { ...CORS, 'content-type': payload.mime } })
+  })
+  watcher.apply(settings.watchedFolders)
+
+  // ---- functions on the engine ----
+  if (PRIMARY) {
+    iii.registerFunction('kernel::ping', async () =>
+      PingResponse.parse({ pong: true, at: new Date().toISOString() }),
+    )
+    iii.registerFunction('kernel::health', async () =>
+      HealthResponse.parse({
+        worker: 'desktop',
+        version: VERSION,
+        ok: true,
+        uptime_ms: Date.now() - started,
+      }),
+    )
+    iii.registerFunction('kernel::receipt', (input: unknown) =>
+      core.receive(CaptureRequest.parse(input), 'api'),
+    )
+    iii.registerFunction('kernel::retry', async (input: unknown) => {
+      const { item_id, stage } = input as { item_id: string; stage?: string }
+      if (stage) core.requeue(String(item_id), String(stage))
+      else core.retry(String(item_id))
+      return { ok: true }
+    })
+    iii.registerFunction('kernel::neighborhood', async (input: unknown) => {
+      const q = NeighbourhoodRequest.parse(input)
+      return core.vault.neighbourhood(q.node, {
+        budget: q.budget,
+        includeSuggested: q.include_suggested,
+        predicates: q.predicates,
+        maxHops: q.max_hops,
+      })
+    })
+    iii.registerFunction('kernel::review', async (input: unknown) => {
+      const { relation_id, status } = ReviewRequest.parse(input)
+      core.review(relation_id, status)
+      return { ok: true }
+    })
+    iii.registerFunction('kernel::tag', async (input: unknown) => {
+      const { item_id, label } = TagRequest.parse(input)
+      return core.tag(item_id, label)
+    })
+    iii.registerFunction('kernel::relations', async (input: unknown) => ({
+      relations: core.relations(String((input as { item_id: string }).item_id)),
+    }))
+    iii.registerFunction('kernel::search', async (input: unknown) => {
+      const { query, limit } = SearchRequest.parse(input)
+      return { hits: await core.search(query, limit) }
+    })
+    // CAP-4: loopback endpoint through iii's http worker; the secret is checked here, not in the worker.
+    iii.registerFunction(
+      'capture::http',
+      async (req: { headers: Record<string, string>; body: unknown }) => {
+        if (!secretOk(req.headers ?? {}))
+          return { status_code: 401, body: { error: 'missing or wrong x-pim-secret' } }
+        const parsed = CaptureRequest.safeParse(req.body)
+        if (!parsed.success)
+          return {
+            status_code: 400,
+            body: { error: 'invalid capture request', issues: parsed.error.issues },
+          }
+        return { status_code: 200, body: await core.receive(parsed.data, 'http') }
+      },
+    )
+    iii.observe(
+      { function_id: 'http::on-request', args: { method: 'POST', path: '/capture' } },
+      'capture::http',
+    )
+  }
+
+  // ---- IPC: the only way the renderer reaches the core ----
+  ipcMain.handle('capture', (_e, req: unknown, surface: string) =>
+    core.receive(CaptureRequest.parse(req), surface),
+  )
+  ipcMain.handle('capture:clipboard', () => captureClipboard())
+  ipcMain.handle('items:list', () => core.items())
+  ipcMain.handle('items:payloads', (_e, id: string) => core.vault.payloads(id))
+  ipcMain.handle('items:fragments', (_e, id: string) => core.vault.fragments(id))
+  ipcMain.handle('items:search', (_e, query: string, hybrid?: boolean) =>
+    core.search(String(query), 50, hybrid === true),
+  )
+  ipcMain.handle('items:notes', (_e, id: string) => core.notes(String(id)))
+  ipcMain.handle('items:enrich', (_e, id: string) => core.requeue(String(id), 'enrich'))
+  ipcMain.handle('models:status', (_e, force?: boolean) => core.modelsStatus(force === true))
+  ipcMain.handle('items:relations', (_e, id: string) => core.relations(id))
+  ipcMain.handle('items:suggestions', () => core.suggestions())
+  ipcMain.handle('items:tags', (_e, id: string) => core.vault.graph.tags(id))
+  ipcMain.handle('items:pin', (_e, id: string, pinned: boolean) => {
+    core.vault.graph.setPinned(id, Boolean(pinned))
+    broadcast()
+  })
+  ipcMain.handle('graph:neighbourhood', (_e, q: unknown) => {
+    const p = NeighbourhoodRequest.parse(q)
+    return core.vault.neighbourhood(p.node, {
+      budget: p.budget,
+      includeSuggested: p.include_suggested,
+      predicates: p.predicates,
+      maxHops: p.max_hops,
+    })
+  })
+  ipcMain.handle('review:relation', (_e, q: unknown) => {
+    const { relation_id, status } = ReviewRequest.parse(q)
+    core.review(relation_id, status)
+  })
+  ipcMain.handle('review:tag', (_e, q: unknown) => {
+    const { item_id, label } = TagRequest.parse(q)
+    return core.tag(item_id, label)
+  })
+  ipcMain.handle('review:untag', (_e, relationId: string) => core.untag(String(relationId)))
+  ipcMain.handle('items:retry', (_e, id: string) => core.retry(id))
+  ipcMain.handle('source:open', async (_e, id: string) => {
+    const item = core.vault.item(id)
+    if (!item) return
+    if (item.source_kind === 'url' && item.source_uri) return shell.openExternal(item.source_uri)
+    const raw = core.vault.payloads(id).find((p) => p.role === 'raw')
+    if (raw) return shell.openPath(core.vault.blobs.pathFor(raw.blob_id))
+  })
+  ipcMain.handle('settings:get', () => ({ ...settings, endpoint: 'http://127.0.0.1:3111/capture' }))
+  ipcMain.handle('settings:set', (_e, patch: Partial<Settings>) => {
+    settings = { ...settings, ...patch }
+    saveSettings(settings)
+    core.models = settings.models
+    registerShortcut()
+    watcher.apply(settings.watchedFolders)
+    return settings
+  })
+  ipcMain.handle('engine:workers', () => workers())
+
+  // ---- M6: export and import (MET-3, MET-5), backup and restore (SEC-4), the vault folder, first run ----
+  ipcMain.handle('export:run', async (_e, ids: string[] | null, dir?: string) => {
+    const target =
+      dir ??
+      (
+        await dialog.showSaveDialog({
+          title: 'Export',
+          defaultPath: join(app.getPath('documents'), `PIM export ${stamp()}`),
+          buttonLabel: 'Export',
+          properties: ['createDirectory', 'showOverwriteConfirmation'],
+        })
+      ).filePath
+    if (!target) return null
+    const selected =
+      ids ??
+      core.vault
+        .items(1_000_000)
+        .filter((i) => i.state !== 'duplicate')
+        .map((i) => i.id)
+    const report = exportItems(core.vault, selected, target, VERSION)
+    if (!dir) shell.showItemInFolder(join(target, 'index.md'))
+    return report
+  })
+  ipcMain.handle('import:run', async (_e, dir?: string) => {
+    const source = dir ?? (await pickFolder('Choose a PIM export folder'))
+    if (!source) return null
+    const report = await importPackage(core.vault, source)
+    broadcast()
+    return report
+  })
+  ipcMain.handle('backup:run', async (_e, dest?: string) => {
+    const folder = dest ?? (await pickFolder('Back up the vault into…', app.getPath('documents')))
+    if (!folder) return null
+    const { dir, manifest } = await backupVault(core.vault, folder, VERSION)
+    settings = { ...settings, lastBackup: { at: manifest.created_at, dir } }
+    saveSettings(settings)
+    return { dir, manifest }
+  })
+  ipcMain.handle('backup:test', async (_e, backupDir?: string) => {
+    const source =
+      backupDir ?? (await pickFolder('Choose a backup folder', settings.lastBackup?.dir))
+    if (!source) return null
+    const tmp = mkdtempSync(join(tmpdir(), 'pim-restore-'))
+    try {
+      const manifest = restoreVault(source, tmp)
+      return { manifest, report: verifyVault(tmp) }
+    } finally {
+      rmSync(tmp, { recursive: true, force: true })
+    }
+  })
+  ipcMain.handle('backup:restore', async (_e, backupDir?: string, target?: string) => {
+    const source =
+      backupDir ?? (await pickFolder('Choose a backup folder', settings.lastBackup?.dir))
+    if (!source) return null
+    const into = target ?? join(dirname(settings.vaultDir), `vault-restored-${stamp()}`)
+    const manifest = restoreVault(source, into)
+    const report = verifyVault(into)
+    if (report.ok) await openVault(into)
+    return { target: into, manifest, report, switched: report.ok }
+  })
+  ipcMain.handle('vault:switch', async (_e, dir?: string) => {
+    const folder = dir ?? (await pickFolder('Choose the vault folder', dirname(settings.vaultDir)))
+    if (!folder) return null
+    await openVault(folder)
+    return settings
+  })
+  ipcMain.handle('runtime:status', async () => ({
+    engine: {
+      url: ENGINE_URL,
+      reachable: await engineListening(ENGINE_URL),
+      bundled: engineProcess !== undefined,
+      workers: await workers().catch(() => [] as string[]),
+    },
+    python: { path: settings.pythonRuntime, present: pythonPresent(settings.pythonRuntime) },
+    models: await core.modelsStatus(),
+    firstRunStartedAt: settings.firstRunDone ? null : new Date(firstRunStarted).toISOString(),
+  }))
+  ipcMain.handle('firstrun:done', () => {
+    settings = { ...settings, firstRunDone: true }
+    saveSettings(settings)
+    console.log(JSON.stringify({ event: 'first_run.done', ms: Date.now() - firstRunStarted }))
+    return settings
+  })
+  ipcMain.handle('shell:reveal', (_e, path: string) => shell.showItemInFolder(String(path)))
+  ipcMain.on('panel:close', () => panel?.hide())
+  ipcMain.on('main:show', showMain)
+
+  registerShortcut()
+  tray = new Tray(nativeImage.createFromDataURL(TRAY_ICON))
+  tray.setToolTip('PIM')
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: 'Capture…', accelerator: settings.shortcut, click: togglePanel },
+      {
+        label: 'Capture clipboard',
+        click: () => void captureClipboard().catch((e) => console.error(String(e))),
+      },
+      { type: 'separator' },
+      { label: 'Open PIM', click: showMain },
+      { label: 'Quit', click: () => app.quit() },
+    ]),
+  )
+  showMain()
+})
+
+app.on('window-all-closed', () => {
+  /* the tray keeps the app alive; capture must work without a window */
+})
+app.on('activate', showMain)
+app.on('before-quit', () => {
+  globalShortcut.unregisterAll()
+  watcher.close()
+  void core?.stop(2_000)
+  void iii?.shutdown()
+  engineProcess?.kill('SIGTERM')
+})
+
+// 16x16 template icon: a filled circle. Replaced by a real asset when the app gets its identity.
+const TRAY_ICON =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAgklEQVR4nGNgoBAwMjAwMDAwMBAFGBgYGBgY/v//jxaWgQZmJiYWBgYGBgYG/v8TMBAFGBgYGBgY6AoGBgYGBgZ8gYGBgYGBgYGQMDAwMDAw0AgwMDAwMDDQCTAwMDAwMNALMDAwMDAw0A0wMDAwMDBgAoAyMDAwMDDQCjAwMDAwMBAFGBgYGBgYAACSVhHt8v9GvgAAAABJRU5ErkJggg=='

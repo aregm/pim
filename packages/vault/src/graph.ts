@@ -97,7 +97,11 @@ const now = () => new Date().toISOString()
 
 /** Entities, relations with evidence, and the budgeted neighbourhood (GRA-1 to GRA-3). */
 export class Graph {
-  constructor(private readonly db: DatabaseSync) {}
+  private readonly db: DatabaseSync
+
+  constructor(db: DatabaseSync) {
+    this.db = db
+  }
 
   /** Finds an entity by kind and normalised name or alias, or creates it; aliases are added, never removed. */
   upsertEntity(kind: string, name: string, aliases: string[] = []): EntityRow {

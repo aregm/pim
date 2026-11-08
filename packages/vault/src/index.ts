@@ -7,9 +7,11 @@ import { uuidv7 } from './id.ts'
 import { MIGRATIONS } from './migrations.ts'
 import { centroid, Vectors } from './vectors.ts'
 
+export * from './backup.ts'
 export { BlobStore } from './blobs.ts'
 export * from './graph.ts'
 export { uuidv7 } from './id.ts'
+export * from './transfer.ts'
 
 export type SourceKind = 'url' | 'text' | 'file' | 'image'
 export type ArtifactState = 'received' | 'preserved' | 'failed' | 'duplicate'
