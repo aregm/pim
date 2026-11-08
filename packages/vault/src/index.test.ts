@@ -17,11 +17,11 @@ afterEach(() => {
 
 describe('schema', () => {
   it('migrates an empty vault to the current version and reopens a populated one', () => {
-    expect(vault.schemaVersion).toBe(2)
+    expect(vault.schemaVersion).toBe(3)
     vault.receipt({ source_kind: 'text', source_id: 'sha256:a', surface: 'test' })
     vault.close()
     const again = new Vault(dir)
-    expect(again.schemaVersion).toBe(2)
+    expect(again.schemaVersion).toBe(3)
     expect(again.items()).toHaveLength(1)
     again.close()
     vault = new Vault(dir)
@@ -140,5 +140,109 @@ describe('fragments and search', () => {
     expect(toFtsQuery('kiosk roll')).toBe('"kiosk"* "roll"*')
     expect(toFtsQuery('"exact phrase" other')).toBe('"exact phrase" "other"*')
     expect(toFtsQuery('a-b (c)')).toBe('"ab"* "c"*')
+  })
+})
+
+describe('graph', () => {
+  const seed = () => {
+    const a = vault.receipt({
+      source_kind: 'text',
+      source_id: 'sha256:a',
+      title: 'A',
+      surface: 's',
+    })
+    const b = vault.receipt({
+      source_kind: 'text',
+      source_id: 'sha256:b',
+      title: 'B',
+      surface: 's',
+    })
+    const c = vault.receipt({
+      source_kind: 'text',
+      source_id: 'sha256:c',
+      title: 'C',
+      surface: 's',
+    })
+    for (const [r, text] of [
+      [a, 'the quorum met at dawn'],
+      [b, 'a quorum was never reached'],
+      [c, 'unrelated words only'],
+    ] as const) {
+      const p = vault.addPayload(r.item_id, 'raw', `sha256:${r.item_id}`, 'text/plain', 1)
+      const run = vault.startRun(r.item_id, 'extract::text', '0')
+      vault.replaceFragments(r.item_id, p.id, run, 'extract::text', [
+        { ordinal: 0, selector: { kind: 'char', start: 0, end: text.length }, text },
+      ])
+    }
+    return { a: a.item_id, b: b.item_id, c: c.item_id }
+  }
+  it('finds shared rare terms with evidence on both ends', () => {
+    const { a, b } = seed()
+    const rare = vault.rareTerms(a, 1)
+    expect(rare.map((r) => r.term)).toContain('quorum')
+    expect(vault.artifactsWithTerm('quorum', a).map((r) => r.artifact_id)).toEqual([b])
+  })
+  it('deduplicates relations per author, keeps a rejection, and answers the five questions', () => {
+    const { a, b } = seed()
+    const fa = vault.fragments(a)[0]?.id ?? ''
+    const r1 = vault.graph.addRelation({
+      subject: { kind: 'item', id: a },
+      predicate: 'related_to',
+      object: { kind: 'item', id: b },
+      author: 'link::shared_terms',
+      generator: 'shared_terms',
+      score: 0.5,
+      evidence: [fa],
+    })
+    const r2 = vault.graph.addRelation({
+      subject: { kind: 'item', id: a },
+      predicate: 'related_to',
+      object: { kind: 'item', id: b },
+      author: 'link::shared_terms',
+      generator: 'shared_terms',
+      score: 0.7,
+      evidence: [fa],
+    })
+    expect(r2.id).toBe(r1.id)
+    expect(r2.score).toBe(0.7)
+    vault.graph.setStatus(r1.id, 'rejected')
+    const r3 = vault.graph.addRelation({
+      subject: { kind: 'item', id: a },
+      predicate: 'related_to',
+      object: { kind: 'item', id: b },
+      author: 'link::shared_terms',
+      generator: 'shared_terms',
+      score: 0.9,
+    })
+    expect(r3.status).toBe('rejected')
+    vault.graph.setStatus(r1.id, 'accepted')
+    const n = vault.neighbourhood({ kind: 'item', id: a })
+    const edge = n.edges[0]
+    expect(edge).toMatchObject({
+      predicate: 'related_to',
+      author: 'link::shared_terms',
+      status: 'accepted',
+      evidence_count: 1,
+    })
+    expect(n.nodes.find((x) => x.id === b)?.reason).toContain('related_to from A')
+  })
+  it('tags are entities, and the budget hides what does not fit', () => {
+    const { a, b, c } = seed()
+    const tag = vault.graph.upsertEntity('tag', ' Meeting ')
+    expect(vault.graph.upsertEntity('tag', 'meeting').id).toBe(tag.id)
+    for (const id of [a, b, c])
+      vault.graph.addRelation({
+        subject: { kind: 'item', id },
+        predicate: 'tagged',
+        object: { kind: 'entity', id: tag.id },
+        author: 'user',
+        status: 'accepted',
+      })
+    expect(vault.graph.tags(a)[0]?.entity.name).toBe('Meeting')
+    const full = vault.neighbourhood({ kind: 'item', id: a })
+    expect(full.nodes.map((n) => n.label).sort()).toEqual(['A', 'B', 'C', 'Meeting'])
+    const small = vault.neighbourhood({ kind: 'item', id: a }, { budget: 2 })
+    expect(small.nodes).toHaveLength(2)
+    expect(small.hidden).toBe(2)
   })
 })

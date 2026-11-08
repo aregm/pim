@@ -2,10 +2,12 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { BlobStore } from './blobs.ts'
+import { Graph } from './graph.ts'
 import { uuidv7 } from './id.ts'
 import { MIGRATIONS } from './migrations.ts'
 
 export { BlobStore } from './blobs.ts'
+export * from './graph.ts'
 export { uuidv7 } from './id.ts'
 
 export type SourceKind = 'url' | 'text' | 'file' | 'image'
@@ -117,6 +119,7 @@ export class Vault {
   readonly dir: string
   readonly db: DatabaseSync
   readonly blobs: BlobStore
+  readonly graph: Graph
 
   constructor(dir: string) {
     this.dir = dir
@@ -125,6 +128,7 @@ export class Vault {
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;')
     this.migrate()
     this.blobs = new BlobStore(join(dir, 'blobs'))
+    this.graph = new Graph(this.db)
   }
 
   close() {
@@ -450,6 +454,102 @@ export class Vault {
       .all(q, q, limit) as unknown as SearchHit[]
   }
 
+  // ---- inputs for the deterministic link generators (GRA-2) ----
+
+  /** Terms of this artifact that few fragments in the whole vault contain, with the fragment that holds each. */
+  rareTerms(
+    artifactId: string,
+    maxDocShare = 0.05,
+    limit = 30,
+  ): { term: string; doc: number; fragment_id: string }[] {
+    const frags = this.db
+      .prepare('SELECT id, text FROM fragment WHERE artifact_id = ?')
+      .all(artifactId) as unknown as { id: string; text: string }[]
+    const total = (this.db.prepare('SELECT COUNT(*) c FROM fragment').get() as { c: number }).c
+    const firstFragment = new Map<string, string>()
+    for (const f of frags)
+      for (const w of f.text.toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}_-]{4,}/gu) ?? [])
+        if (!firstFragment.has(w)) firstFragment.set(w, f.id)
+    if (firstFragment.size === 0) return []
+    const terms = [...firstFragment.keys()]
+    const out: { term: string; doc: number; fragment_id: string }[] = []
+    const maxDoc = Math.max(2, Math.floor(total * maxDocShare))
+    const stmt = this.db.prepare('SELECT term, doc FROM fragment_vocab WHERE term = ?')
+    for (const term of terms) {
+      const row = stmt.get(term) as { term: string; doc: number } | undefined
+      if (row && row.doc >= 2 && row.doc <= maxDoc)
+        out.push({ term, doc: row.doc, fragment_id: firstFragment.get(term) ?? '' })
+    }
+    return out.sort((a, b) => a.doc - b.doc).slice(0, limit)
+  }
+
+  /** Other artifacts whose fragments contain the term, with one fragment each as evidence. */
+  artifactsWithTerm(
+    term: string,
+    excludeArtifact: string,
+    limit = 50,
+  ): { artifact_id: string; fragment_id: string }[] {
+    return this.db
+      .prepare(
+        `SELECT f.artifact_id, MIN(f.id) AS fragment_id FROM fragment_fts JOIN fragment f ON f.rowid = fragment_fts.rowid
+         WHERE fragment_fts MATCH ? AND f.artifact_id != ? GROUP BY f.artifact_id LIMIT ?`,
+      )
+      .all(`"${term.replace(/"/g, '')}"`, excludeArtifact, limit) as unknown as {
+      artifact_id: string
+      fragment_id: string
+    }[]
+  }
+
+  /** The URL item an href points at, if captured. */
+  itemForUrl(href: string): string | undefined {
+    let url: string
+    try {
+      const u = new URL(href)
+      u.hash = ''
+      url = u.href
+    } catch {
+      return undefined
+    }
+    return (
+      this.db
+        .prepare("SELECT item_id FROM artifact WHERE source_kind = 'url' AND source_id = ?")
+        .get(url) as { item_id: string } | undefined
+    )?.item_id
+  }
+
+  /** Items first captured within the window around this artifact's first capture. */
+  capturedNear(
+    artifactId: string,
+    windowMs = 30 * 60_000,
+  ): { artifact_id: string; minutes: number }[] {
+    const t = (
+      this.db
+        .prepare('SELECT MIN(at) at FROM capture_event WHERE artifact_id = ?')
+        .get(artifactId) as { at: string | null }
+    ).at
+    if (!t) return []
+    const centre = Date.parse(t)
+    return (
+      this.db
+        .prepare(
+          'SELECT artifact_id, MIN(at) at FROM capture_event WHERE artifact_id != ? GROUP BY artifact_id',
+        )
+        .all(artifactId) as unknown as { artifact_id: string; at: string }[]
+    )
+      .map((r) => ({
+        artifact_id: r.artifact_id,
+        minutes: Math.abs(Date.parse(r.at) - centre) / 60_000,
+      }))
+      .filter((r) => r.minutes * 60_000 <= windowMs)
+  }
+
+  neighbourhood(
+    focus: { kind: 'item' | 'entity'; id: string },
+    opts?: Parameters<Graph['neighbourhood']>[1],
+  ) {
+    return this.graph.neighbourhood(focus, opts)
+  }
+
   /** Adds a stage job for an artifact unless one exists (any state). */
   enqueue(artifactId: string, stage: string): boolean {
     const t = now()
@@ -459,6 +559,17 @@ export class Vault {
       )
       .run(uuidv7(), artifactId, stage, 'open', t, t, t)
     return r.changes > 0
+  }
+
+  /** Reopens a finished stage so it runs again (the link stage after new fragments arrive). */
+  requeue(artifactId: string, stage: string) {
+    if (this.enqueue(artifactId, stage)) return
+    const t = now()
+    this.db
+      .prepare(
+        "UPDATE job SET state = 'open', attempts = 0, next_run_at = ?, lease_until = NULL, updated_at = ? WHERE artifact_id = ? AND stage = ? AND state IN ('done', 'failed')",
+      )
+      .run(t, t, artifactId, stage)
   }
 
   /** Gives every preserved artifact that never had `stage` a job for it; how an upgrade catches up. */

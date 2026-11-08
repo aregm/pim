@@ -5,8 +5,11 @@ import {
   CaptureRequest,
   EngineWorkersList,
   HealthResponse,
+  NeighbourhoodRequest,
   PingResponse,
+  ReviewRequest,
   SearchRequest,
+  TagRequest,
 } from '@pim/contracts'
 import {
   app,
@@ -164,10 +167,32 @@ app.whenReady().then(() => {
     core.receive(CaptureRequest.parse(input), 'api'),
   )
   iii.registerFunction('kernel::retry', async (input: unknown) => {
-    const { item_id } = input as { item_id: string }
-    core.retry(String(item_id))
+    const { item_id, stage } = input as { item_id: string; stage?: string }
+    if (stage) core.requeue(String(item_id), String(stage))
+    else core.retry(String(item_id))
     return { ok: true }
   })
+  iii.registerFunction('kernel::neighborhood', async (input: unknown) => {
+    const q = NeighbourhoodRequest.parse(input)
+    return core.vault.neighbourhood(q.node, {
+      budget: q.budget,
+      includeSuggested: q.include_suggested,
+      predicates: q.predicates,
+      maxHops: q.max_hops,
+    })
+  })
+  iii.registerFunction('kernel::review', async (input: unknown) => {
+    const { relation_id, status } = ReviewRequest.parse(input)
+    core.review(relation_id, status)
+    return { ok: true }
+  })
+  iii.registerFunction('kernel::tag', async (input: unknown) => {
+    const { item_id, label } = TagRequest.parse(input)
+    return core.tag(item_id, label)
+  })
+  iii.registerFunction('kernel::relations', async (input: unknown) => ({
+    relations: core.relations(String((input as { item_id: string }).item_id)),
+  }))
   iii.registerFunction('kernel::search', async (input: unknown) => {
     const { query, limit } = SearchRequest.parse(input)
     return { hits: core.search(query, limit) }
@@ -201,6 +226,31 @@ app.whenReady().then(() => {
   ipcMain.handle('items:payloads', (_e, id: string) => core.vault.payloads(id))
   ipcMain.handle('items:fragments', (_e, id: string) => core.vault.fragments(id))
   ipcMain.handle('items:search', (_e, query: string) => core.search(String(query), 50))
+  ipcMain.handle('items:relations', (_e, id: string) => core.relations(id))
+  ipcMain.handle('items:suggestions', () => core.suggestions())
+  ipcMain.handle('items:tags', (_e, id: string) => core.vault.graph.tags(id))
+  ipcMain.handle('items:pin', (_e, id: string, pinned: boolean) => {
+    core.vault.graph.setPinned(id, Boolean(pinned))
+    broadcast()
+  })
+  ipcMain.handle('graph:neighbourhood', (_e, q: unknown) => {
+    const p = NeighbourhoodRequest.parse(q)
+    return core.vault.neighbourhood(p.node, {
+      budget: p.budget,
+      includeSuggested: p.include_suggested,
+      predicates: p.predicates,
+      maxHops: p.max_hops,
+    })
+  })
+  ipcMain.handle('review:relation', (_e, q: unknown) => {
+    const { relation_id, status } = ReviewRequest.parse(q)
+    core.review(relation_id, status)
+  })
+  ipcMain.handle('review:tag', (_e, q: unknown) => {
+    const { item_id, label } = TagRequest.parse(q)
+    return core.tag(item_id, label)
+  })
+  ipcMain.handle('review:untag', (_e, relationId: string) => core.untag(String(relationId)))
   ipcMain.handle('items:retry', (_e, id: string) => core.retry(id))
   ipcMain.handle('source:open', async (_e, id: string) => {
     const item = core.vault.item(id)

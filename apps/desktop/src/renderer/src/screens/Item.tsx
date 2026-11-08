@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { FragmentView, ItemView, PayloadView } from '../pim.d.ts'
+import type { FragmentView, ItemView, PayloadView, RelationView, TagView } from '../pim.d.ts'
 import { Button, Chip, colors, kindLabel, when } from '../ui.tsx'
 import { HtmlViewer } from '../viewers/HtmlViewer.tsx'
 import { ImageViewer } from '../viewers/ImageViewer.tsx'
@@ -15,15 +15,40 @@ const kb = (n: number) =>
       : `${(n / 1048576).toFixed(1)} MB`
 
 /** The source on the left, exactly where a fragment points; the fragments on the right (UI-3). */
-export function Item({ item, focusFragment }: { item: ItemView; focusFragment: string | null }) {
+export function Item({
+  item,
+  focusFragment,
+  onShowInGraph,
+  onOpenItem,
+}: {
+  item: ItemView
+  focusFragment: string | null
+  onShowInGraph: (id: string) => void
+  onOpenItem: (id: string, fragment?: string | null) => void
+}) {
   const [payloads, setPayloads] = useState<PayloadView[]>([])
   const [fragments, setFragments] = useState<FragmentView[]>([])
   const [selected, setSelected] = useState<string | null>(focusFragment)
+  const [tags, setTags] = useState<TagView[]>([])
+  const [relations, setRelations] = useState<RelationView[]>([])
+  const [newTag, setNewTag] = useState('')
   useEffect(() => {
     void window.pim.payloads(item.id).then(setPayloads)
     void window.pim.fragments(item.id).then(setFragments)
     setSelected(focusFragment)
+    const loadGraph = () => {
+      void window.pim.tags(item.id).then(setTags)
+      void window.pim.relations(item.id).then(setRelations)
+    }
+    loadGraph()
+    return window.pim.onItemsChanged(loadGraph)
   }, [item.id, focusFragment])
+  const addTag = async () => {
+    const label = newTag.trim()
+    if (!label) return
+    await window.pim.tag(item.id, label)
+    setNewTag('')
+  }
   const fragment = fragments.find((f) => f.id === selected) ?? null
   const viewer = (() => {
     const readable = payloads.find((p) => p.role === 'normalized' && p.mime === 'text/html')
@@ -101,6 +126,7 @@ export function Item({ item, focusFragment }: { item: ItemView; focusFragment: s
             {item.error && <span style={{ color: colors.bad }}> · {item.error}</span>}
           </span>
           <Button onClick={() => void window.pim.openSource(item.id)}>Open original</Button>
+          <Button onClick={() => onShowInGraph(item.id)}>Show in graph</Button>
         </div>
       </div>
       <div style={{ display: 'flex', gap: 16, flex: 1, minHeight: 0 }}>
@@ -149,6 +175,136 @@ export function Item({ item, focusFragment }: { item: ItemView; focusFragment: s
               </li>
             ))}
           </ol>
+          <div style={{ marginTop: 12 }}>
+            <strong>Tags</strong>
+            <div
+              style={{
+                display: 'flex',
+                gap: 6,
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                margin: '6px 0',
+              }}
+            >
+              {tags.map((t) => (
+                <span
+                  key={t.relation_id}
+                  style={{
+                    border: `1px solid ${colors.border}`,
+                    borderRadius: 10,
+                    padding: '1px 8px',
+                  }}
+                >
+                  {t.entity.name}{' '}
+                  <button
+                    type="button"
+                    onClick={() => void window.pim.untag(t.relation_id)}
+                    title="remove tag"
+                    style={{
+                      border: 0,
+                      background: 'none',
+                      cursor: 'pointer',
+                      color: colors.muted,
+                    }}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+              <input
+                value={newTag}
+                onChange={(e) => setNewTag(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void addTag()
+                }}
+                placeholder="add tag, Return"
+                style={{
+                  padding: '2px 6px',
+                  border: `1px solid ${colors.border}`,
+                  borderRadius: 6,
+                  fontFamily: 'inherit',
+                  fontSize: 12,
+                  width: 120,
+                }}
+              />
+            </div>
+            <strong>Connections</strong>{' '}
+            <span style={{ color: colors.muted }}>
+              {relations.filter((r) => r.predicate !== 'tagged').length}
+            </span>
+            <ul style={{ paddingLeft: 0, listStyle: 'none', margin: '6px 0' }}>
+              {relations
+                .filter((r) => r.predicate !== 'tagged')
+                .map((r) => {
+                  const otherId = r.subject_id === item.id ? r.object_id : r.subject_id
+                  const otherLabel = r.subject_id === item.id ? r.object_label : r.subject_label
+                  const otherKind = r.subject_id === item.id ? r.object_kind : r.subject_kind
+                  return (
+                    <li
+                      key={r.id}
+                      style={{ padding: '3px 0', borderBottom: `1px solid ${colors.border}` }}
+                    >
+                      <span style={{ color: colors.accent }}>{r.predicate}</span>{' '}
+                      {otherKind === 'item' ? (
+                        <button
+                          type="button"
+                          onClick={() => onOpenItem(otherId)}
+                          style={{
+                            border: 0,
+                            background: 'none',
+                            cursor: 'pointer',
+                            font: 'inherit',
+                            padding: 0,
+                            color: 'inherit',
+                            textDecoration: 'underline',
+                          }}
+                        >
+                          {otherLabel}
+                        </button>
+                      ) : (
+                        otherLabel
+                      )}
+                      <span style={{ color: colors.muted }}>
+                        {' '}
+                        · {r.status} · {r.author}
+                        {r.score_json &&
+                          'terms' in r.score_json &&
+                          ` (${(r.score_json.terms as string[]).slice(0, 4).join(', ')})`}
+                      </span>
+                      {r.status === 'suggested' && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => void window.pim.review(r.id, 'accepted')}
+                            style={{
+                              marginLeft: 6,
+                              border: 0,
+                              background: 'none',
+                              color: colors.ok,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            accept
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void window.pim.review(r.id, 'rejected')}
+                            style={{
+                              border: 0,
+                              background: 'none',
+                              color: colors.bad,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            reject
+                          </button>
+                        </>
+                      )}
+                    </li>
+                  )
+                })}
+            </ul>
+          </div>
           <details style={{ marginTop: 12 }}>
             <summary style={{ color: colors.muted, cursor: 'pointer' }}>
               payloads ({payloads.length})
