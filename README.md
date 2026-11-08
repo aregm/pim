@@ -144,4 +144,4 @@ v0.1 chose function and interface over the security architecture and the quality
 
 ## Licence
 
-No licence yet. The repository is private until the product posture is decided; the iii engine is under the Elastic License 2.0, which constrains a hosted offering.
+No licence yet: the repository is public to read, but no rights to use, copy or redistribute the code are granted until the product posture (personal, open source, commercial) is decided. The iii engine it runs on is under the Elastic License 2.0, which constrains a hosted offering.
